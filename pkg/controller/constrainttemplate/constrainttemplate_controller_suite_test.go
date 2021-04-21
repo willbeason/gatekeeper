@@ -16,6 +16,7 @@ limitations under the License.
 package constrainttemplate
 
 import (
+	"context"
 	stdlog "log"
 	"os"
 	"path/filepath"
@@ -23,55 +24,71 @@ import (
 	"testing"
 
 	"github.com/onsi/gomega"
-	"github.com/open-policy-agent/gatekeeper/pkg/apis"
+	"github.com/open-policy-agent/gatekeeper/apis"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 var cfg *rest.Config
 
 func TestMain(m *testing.M) {
+	var err error
+
 	t := &envtest.Environment{
 		CRDDirectoryPaths: []string{
-			filepath.Join("..", "..", "..", "config", "crds"),
-			filepath.Join("..", "..", "..", "vendor", "github.com", "open-policy-agent", "frameworks", "constraint", "config", "crds"),
+			filepath.Join("..", "..", "..", "vendor", "github.com", "open-policy-agent", "frameworks", "constraint", "deploy", "crds.yaml"),
+			filepath.Join("..", "..", "..", "config", "crd", "bases"),
 		},
+		ErrorIfCRDPathMissing: true,
 	}
-	apis.AddToScheme(scheme.Scheme)
-
-	var err error
-	if cfg, err = t.Start(); err != nil {
+	if err := apis.AddToScheme(scheme.Scheme); err != nil {
 		stdlog.Fatal(err)
 	}
 
+	if cfg, err = t.Start(); err != nil {
+		stdlog.Fatal(err)
+	}
+	stdlog.Print("STARTED")
+
 	code := m.Run()
-	t.Stop()
+	if err = t.Stop(); err != nil {
+		stdlog.Printf("error while trying to stop server: %v", err)
+	}
 	os.Exit(code)
 }
 
-// SetupTestReconcile returns a reconcile.Reconcile implementation that delegates to inner and
-// writes the request to requests after Reconcile is finished.
-func SetupTestReconcile(inner reconcile.Reconciler) (reconcile.Reconciler, chan reconcile.Request) {
-	requests := make(chan reconcile.Request)
-	fn := reconcile.Func(func(req reconcile.Request) (reconcile.Result, error) {
-		result, err := inner.Reconcile(req)
-		requests <- req
-		return result, err
-	})
-	return fn, requests
-}
-
 // StartTestManager adds recFn
-func StartTestManager(mgr manager.Manager, g *gomega.GomegaWithT) (chan struct{}, *sync.WaitGroup) {
-	stop := make(chan struct{})
+func StartTestManager(ctx context.Context, mgr manager.Manager, g *gomega.GomegaWithT) *sync.WaitGroup {
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		g.Expect(mgr.Start(stop)).NotTo(gomega.HaveOccurred())
+		g.Expect(mgr.Start(ctx)).NotTo(gomega.HaveOccurred())
 	}()
-	return stop, wg
+	return wg
+}
+
+// Bootstrap the gatekeeper-system namespace for use in tests
+func createGatekeeperNamespace(cfg *rest.Config) error {
+	c, err := client.New(cfg, client.Options{})
+	if err != nil {
+		return err
+	}
+
+	// Create gatekeeper namespace
+	ns := &v1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gatekeeper-system",
+		},
+	}
+
+	ctx := context.Background()
+	_, err = controllerutil.CreateOrUpdate(ctx, c, ns, func() error { return nil })
+	return err
 }

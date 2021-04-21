@@ -17,160 +17,310 @@ package sync
 
 import (
 	"context"
-	"fmt"
-	"reflect"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-logr/logr"
-	opa "github.com/open-policy-agent/frameworks/constraint/pkg/client"
+	"github.com/open-policy-agent/gatekeeper/pkg/controller/config/process"
+	"github.com/open-policy-agent/gatekeeper/pkg/logging"
+	"github.com/open-policy-agent/gatekeeper/pkg/metrics"
+	"github.com/open-policy-agent/gatekeeper/pkg/readiness"
+	"github.com/open-policy-agent/gatekeeper/pkg/util"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 var log = logf.Log.WithName("controller").WithValues("metaKind", "Sync")
 
-const (
-	finalizerName = "finalizers.gatekeeper.sh/sync"
-)
-
 type Adder struct {
-	Opa opa.Client
+	Opa             OpaDataClient
+	Events          <-chan event.GenericEvent
+	MetricsCache    *MetricsCache
+	Tracker         *readiness.Tracker
+	ProcessExcluder *process.Excluder
 }
 
 // Add creates a new Sync Controller and adds it to the Manager with default RBAC. The Manager will set fields on the Controller
 // and Start it when the Manager is Started.
-func (a *Adder) Add(mgr manager.Manager, gvk schema.GroupVersionKind) error {
-	r := newReconciler(mgr, gvk, a.Opa)
-	return add(mgr, r, gvk)
+func (a *Adder) Add(mgr manager.Manager) error {
+	reporter, err := NewStatsReporter()
+	if err != nil {
+		log.Error(err, "Sync metrics reporter could not start")
+		return err
+	}
+
+	r, err := newReconciler(mgr, a.Opa, *reporter, a.MetricsCache, a.Tracker, a.ProcessExcluder)
+	if err != nil {
+		return err
+	}
+	return add(mgr, r, a.Events)
 }
 
 // newReconciler returns a new reconcile.Reconciler
-func newReconciler(mgr manager.Manager, gvk schema.GroupVersionKind, opa opa.Client) reconcile.Reconciler {
+func newReconciler(
+	mgr manager.Manager,
+	opa OpaDataClient,
+	reporter Reporter,
+	metricsCache *MetricsCache,
+	tracker *readiness.Tracker,
+	processExcluder *process.Excluder) (reconcile.Reconciler, error) {
+
 	return &ReconcileSync{
-		Client: mgr.GetClient(),
-		scheme: mgr.GetScheme(),
-		opa:    opa,
-		log:    log.WithValues("kind", gvk.Kind, "apiVersion", gvk.GroupVersion().String()),
-		gvk:    gvk,
-	}
+		reader:          mgr.GetCache(),
+		scheme:          mgr.GetScheme(),
+		opa:             opa,
+		log:             log,
+		reporter:        reporter,
+		metricsCache:    metricsCache,
+		tracker:         tracker,
+		processExcluder: processExcluder,
+	}, nil
 }
 
 // add adds a new Controller to mgr with r as the reconcile.Reconciler
-func add(mgr manager.Manager, r reconcile.Reconciler, gvk schema.GroupVersionKind) error {
+func add(mgr manager.Manager, r reconcile.Reconciler, events <-chan event.GenericEvent) error {
 	// Create a new controller
-	c, err := controller.New(fmt.Sprintf("%s-sync-controller", gvk.String()), mgr, controller.Options{Reconciler: r})
+	c, err := controller.New("sync-controller", mgr, controller.Options{Reconciler: r})
 	if err != nil {
 		return err
 	}
 
-	// Watch for changes to the provided constraint
-	instance := unstructured.Unstructured{}
-	instance.SetGroupVersionKind(gvk)
-	err = c.Watch(&source.Kind{Type: &instance}, &handler.EnqueueRequestForObject{})
-	if err != nil {
-		return err
-	}
-
-	return nil
+	// Watch for changes to the provided resource
+	return c.Watch(
+		&source.Channel{
+			Source:         events,
+			DestBufferSize: 1024,
+		},
+		handler.EnqueueRequestsFromMapFunc(util.EventPackerMapFunc()),
+	)
 }
 
 var _ reconcile.Reconciler = &ReconcileSync{}
 
-// ReconcileSync reconciles an arbitrary constraint object described by Kind
-type ReconcileSync struct {
-	client.Client
-	scheme *runtime.Scheme
-	opa    opa.Client
-	gvk    schema.GroupVersionKind
-	log    logr.Logger
+type MetricsCache struct {
+	mux        sync.RWMutex
+	Cache      map[string]Tags
+	KnownKinds map[string]bool
 }
 
-// Reconcile reads that state of the cluster for a constraint object and makes changes based on the state read
-// and what is in the constraint.Spec
+type Tags struct {
+	Kind   string
+	Status metrics.Status
+}
+
+// ReconcileSync reconciles an arbitrary object described by Kind
+type ReconcileSync struct {
+	reader client.Reader
+
+	scheme          *runtime.Scheme
+	opa             OpaDataClient
+	log             logr.Logger
+	reporter        Reporter
+	metricsCache    *MetricsCache
+	tracker         *readiness.Tracker
+	processExcluder *process.Excluder
+}
+
 // +kubebuilder:rbac:groups=constraints.gatekeeper.sh,resources=*,verbs=get;list;watch;create;update;patch;delete
-func (r *ReconcileSync) Reconcile(request reconcile.Request) (reconcile.Result, error) {
-	instance := &unstructured.Unstructured{}
-	instance.SetGroupVersionKind(r.gvk)
-	err := r.Get(context.TODO(), request.NamespacedName, instance)
+
+// Reconcile reads that state of the cluster for an object and makes changes based on the state read
+// and what is in the constraint.Spec
+func (r *ReconcileSync) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
+	timeStart := time.Now()
+
+	gvk, unpackedRequest, err := util.UnpackRequest(request)
 	if err != nil {
+		// Unrecoverable, do not retry.
+		// TODO(OREN) add metric
+		log.Error(err, "unpacking request", "request", request)
+		return reconcile.Result{}, nil
+	}
+
+	syncKey := r.metricsCache.GetSyncKey(unpackedRequest.Namespace, unpackedRequest.Name)
+	reportMetrics := false
+	defer func() {
+		if reportMetrics {
+			if err := r.reporter.reportSyncDuration(time.Since(timeStart)); err != nil {
+				log.Error(err, "failed to report sync duration")
+			}
+
+			r.metricsCache.ReportSync(&r.reporter)
+
+			if err := r.reporter.reportLastSync(); err != nil {
+				log.Error(err, "failed to report last sync timestamp")
+			}
+		}
+	}()
+
+	instance := &unstructured.Unstructured{}
+	instance.SetGroupVersionKind(gvk)
+
+	if err := r.reader.Get(ctx, unpackedRequest.NamespacedName, instance); err != nil {
 		if errors.IsNotFound(err) {
-			// Object not found, return.  Created objects are automatically garbage collected.
-			// For additional cleanup logic use finalizers.
+			// This is a deletion; remove the data
+			instance.SetNamespace(unpackedRequest.Namespace)
+			instance.SetName(unpackedRequest.Name)
+			if _, err := r.opa.RemoveData(context.Background(), instance); err != nil {
+				return reconcile.Result{}, err
+			}
+
+			// cancel expectations
+			t := r.tracker.ForData(instance.GroupVersionKind())
+			t.CancelExpect(instance)
+
+			r.metricsCache.DeleteObject(syncKey)
+			reportMetrics = true
 			return reconcile.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
 		return reconcile.Result{}, err
 	}
-	// For some reason 'Status' objects corresponding to rejection messages are being pushed
-	if instance.GroupVersionKind() != r.gvk {
-		log.Info("ignoring unexpected data", "data", instance)
+
+	// namespace is excluded from sync
+	isExcludedNamespace, err := r.skipExcludedNamespace(instance)
+	if err != nil {
+		log.Error(err, "error while excluding namespaces")
+	}
+
+	if isExcludedNamespace {
+		// cancel expectations
+		t := r.tracker.ForData(instance.GroupVersionKind())
+		t.CancelExpect(instance)
 		return reconcile.Result{}, nil
 	}
 
-	if instance.GetDeletionTimestamp().IsZero() {
-		if !containsString(finalizerName, instance.GetFinalizers()) {
-			instance.SetFinalizers(append(instance.GetFinalizers(), finalizerName))
-			// For some reason the instance sometimes gets changed by update when there is a race
-			// condition that leads to a validating webhook deny of the update
-			cpy := instance.DeepCopy()
-			if err := r.Update(context.Background(), cpy); err != nil {
-				return reconcile.Result{}, err
-			}
-			if !reflect.DeepEqual(instance, cpy) {
-				log.Info("instance and cpy differ")
-			}
-		}
-		log.Info("data will be added", "data", instance)
-		if _, err := r.opa.AddData(context.Background(), instance); err != nil {
+	if !instance.GetDeletionTimestamp().IsZero() {
+		if _, err := r.opa.RemoveData(context.Background(), instance); err != nil {
 			return reconcile.Result{}, err
 		}
-	} else {
-		// Handle deletion
-		if HasFinalizer(instance) {
-			if _, err := r.opa.RemoveData(context.Background(), instance); err != nil {
-				return reconcile.Result{}, err
-			}
-			if err := RemoveFinalizer(r, instance); err != nil {
-				return reconcile.Result{}, err
-			}
-		}
+
+		// cancel expectations
+		t := r.tracker.ForData(instance.GroupVersionKind())
+		t.CancelExpect(instance)
+
+		r.metricsCache.DeleteObject(syncKey)
+		reportMetrics = true
+		return reconcile.Result{}, nil
 	}
+
+	r.log.V(logging.DebugLevel).Info(
+		"data will be added",
+		logging.ResourceAPIVersion, instance.GetAPIVersion(),
+		logging.ResourceKind, instance.GetKind(),
+		logging.ResourceNamespace, instance.GetNamespace(),
+		logging.ResourceName, instance.GetName(),
+	)
+
+	if _, err := r.opa.AddData(context.Background(), instance); err != nil {
+		r.metricsCache.AddObject(syncKey, Tags{
+			Kind:   instance.GetKind(),
+			Status: metrics.ErrorStatus,
+		})
+		reportMetrics = true
+
+		return reconcile.Result{}, err
+	}
+	r.tracker.ForData(gvk).Observe(instance)
+	log.V(1).Info("[readiness] observed data", "gvk", gvk, "namespace", instance.GetNamespace(), "name", instance.GetName())
+
+	r.metricsCache.AddObject(syncKey, Tags{
+		Kind:   instance.GetKind(),
+		Status: metrics.ActiveStatus,
+	})
+
+	r.metricsCache.addKind(instance.GetKind())
+
+	reportMetrics = true
 
 	return reconcile.Result{}, nil
 }
 
-func HasFinalizer(obj *unstructured.Unstructured) bool {
-	return containsString(finalizerName, obj.GetFinalizers())
+func (r *ReconcileSync) skipExcludedNamespace(obj *unstructured.Unstructured) (bool, error) {
+	isNamespaceExcluded, err := r.processExcluder.IsNamespaceExcluded(process.Sync, obj)
+	if err != nil {
+		return false, err
+	}
+
+	return isNamespaceExcluded, err
 }
 
-func RemoveFinalizer(c client.Client, obj *unstructured.Unstructured) error {
-	obj.SetFinalizers(removeString(finalizerName, obj.GetFinalizers()))
-	return c.Update(context.Background(), obj)
+func NewMetricsCache() *MetricsCache {
+	return &MetricsCache{
+		Cache:      make(map[string]Tags),
+		KnownKinds: make(map[string]bool),
+	}
 }
 
-func containsString(s string, items []string) bool {
-	for _, item := range items {
-		if item == s {
-			return true
+func (c *MetricsCache) GetSyncKey(namespace string, name string) string {
+	return strings.Join([]string{namespace, name}, "/")
+}
+
+// need to know encountered kinds to reset metrics for that kind
+// this is a known memory leak
+// footprint should naturally reset on Pod upgrade b/c the container restarts
+func (c *MetricsCache) addKind(key string) {
+	c.mux.Lock()
+	defer c.mux.Unlock()
+
+	c.KnownKinds[key] = true
+}
+
+func (c *MetricsCache) ResetCache() {
+	c.mux.Lock()
+	defer c.mux.Unlock()
+
+	c.Cache = make(map[string]Tags)
+}
+
+func (c *MetricsCache) AddObject(key string, t Tags) {
+	c.mux.Lock()
+	defer c.mux.Unlock()
+
+	c.Cache[key] = Tags{
+		Kind:   t.Kind,
+		Status: t.Status,
+	}
+}
+
+func (c *MetricsCache) DeleteObject(key string) {
+	c.mux.Lock()
+	defer c.mux.Unlock()
+
+	delete(c.Cache, key)
+}
+
+func (c *MetricsCache) ReportSync(reporter *Reporter) {
+	c.mux.RLock()
+	defer c.mux.RUnlock()
+
+	totals := make(map[Tags]int)
+	for _, v := range c.Cache {
+		totals[v]++
+	}
+
+	for kind := range c.KnownKinds {
+		for _, status := range metrics.AllStatuses {
+			if err := reporter.reportSync(
+				Tags{
+					Kind:   kind,
+					Status: status,
+				},
+				int64(totals[Tags{
+					Kind:   kind,
+					Status: status,
+				}])); err != nil {
+				log.Error(err, "failed to report sync")
+			}
 		}
 	}
-	return false
-}
-
-func removeString(s string, items []string) []string {
-	var rval []string
-	for _, item := range items {
-		if item != s {
-			rval = append(rval, item)
-		}
-	}
-	return rval
 }

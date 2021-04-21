@@ -50,6 +50,14 @@ var DefaultBuiltins = [...]*Builtin{
 	Abs,
 	Rem,
 
+	// Bitwise Arithmetic
+	BitsOr,
+	BitsAnd,
+	BitsNegate,
+	BitsXOr,
+	BitsShiftLeft,
+	BitsShiftRight,
+
 	// Binary
 	And,
 	Or,
@@ -65,9 +73,12 @@ var DefaultBuiltins = [...]*Builtin{
 
 	// Arrays
 	ArrayConcat,
+	ArraySlice,
 
-	// Casting
+	// Conversions
 	ToNumber,
+
+	// Casts (DEPRECATED)
 	CastObject,
 	CastNull,
 	CastBoolean,
@@ -76,11 +87,14 @@ var DefaultBuiltins = [...]*Builtin{
 	CastArray,
 
 	// Regular Expressions
+	RegexIsValid,
 	RegexMatch,
+	RegexMatchDeprecated,
 	RegexSplit,
 	GlobsMatch,
 	RegexTemplateMatch,
 	RegexFind,
+	RegexFindAllStringSubmatch,
 
 	// Sets
 	SetDiff,
@@ -99,29 +113,60 @@ var DefaultBuiltins = [...]*Builtin{
 	EndsWith,
 	Split,
 	Replace,
+	ReplaceN,
 	Trim,
+	TrimLeft,
+	TrimPrefix,
+	TrimRight,
+	TrimSuffix,
+	TrimSpace,
 	Sprintf,
+
+	// Numbers
+	NumbersRange,
 
 	// Encoding
 	JSONMarshal,
 	JSONUnmarshal,
 	Base64Encode,
 	Base64Decode,
+	Base64IsValid,
 	Base64UrlEncode,
 	Base64UrlDecode,
 	URLQueryDecode,
 	URLQueryEncode,
 	URLQueryEncodeObject,
+	URLQueryDecodeObject,
 	YAMLMarshal,
 	YAMLUnmarshal,
+
+	// Object Manipulation
+	ObjectUnion,
+	ObjectRemove,
+	ObjectFilter,
+	ObjectGet,
+
+	// JSON Object Manipulation
+	JSONFilter,
+	JSONRemove,
 
 	// Tokens
 	JWTDecode,
 	JWTVerifyRS256,
+	JWTVerifyRS384,
+	JWTVerifyRS512,
 	JWTVerifyPS256,
+	JWTVerifyPS384,
+	JWTVerifyPS512,
 	JWTVerifyES256,
+	JWTVerifyES384,
+	JWTVerifyES512,
 	JWTVerifyHS256,
+	JWTVerifyHS384,
+	JWTVerifyHS512,
 	JWTDecodeVerify,
+	JWTEncodeSignRaw,
+	JWTEncodeSign,
 
 	// Time
 	NowNanos,
@@ -131,12 +176,18 @@ var DefaultBuiltins = [...]*Builtin{
 	Date,
 	Clock,
 	Weekday,
+	AddDate,
 
 	// Crypto
 	CryptoX509ParseCertificates,
+	CryptoMd5,
+	CryptoSha1,
+	CryptoSha256,
+	CryptoX509ParseCertificateRequest,
 
 	// Graphs
 	WalkBuiltin,
+	ReachableBuiltin,
 
 	// Sort
 	Sort,
@@ -165,10 +216,25 @@ var DefaultBuiltins = [...]*Builtin{
 
 	// CIDR
 	NetCIDROverlap,
+	NetCIDRIntersects,
+	NetCIDRContains,
+	NetCIDRContainsMatches,
+	NetCIDRExpand,
+	NetCIDRMerge,
 
 	// Glob
 	GlobMatch,
 	GlobQuoteMeta,
+
+	// Units
+	UnitsParseBytes,
+
+	// UUIDs
+	UUIDRFC4122,
+
+	//SemVers
+	SemVerIsValid,
+	SemVerCompare,
 }
 
 // BuiltinMap provides a convenient mapping of built-in names to
@@ -181,6 +247,7 @@ var BuiltinMap map[string]*Builtin
 var IgnoreDuringPartialEval = []*Builtin{
 	NowNanos,
 	HTTPSend,
+	UUIDRFC4122,
 }
 
 /**
@@ -352,10 +419,69 @@ var Rem = &Builtin{
 }
 
 /**
- * Binary
+ * Bitwise
  */
 
-// TODO(tsandall): update binary operators to support integers.
+// BitsOr returns the bitwise "or" of two integers.
+var BitsOr = &Builtin{
+	Name: "bits.or",
+	Decl: types.NewFunction(
+		types.Args(types.N, types.N),
+		types.N,
+	),
+}
+
+// BitsAnd returns the bitwise "and" of two integers.
+var BitsAnd = &Builtin{
+	Name: "bits.and",
+	Decl: types.NewFunction(
+		types.Args(types.N, types.N),
+		types.N,
+	),
+}
+
+// BitsNegate returns the bitwise "negation" of an integer (i.e. flips each
+// bit).
+var BitsNegate = &Builtin{
+	Name: "bits.negate",
+	Decl: types.NewFunction(
+		types.Args(types.N),
+		types.N,
+	),
+}
+
+// BitsXOr returns the bitwise "exclusive-or" of two integers.
+var BitsXOr = &Builtin{
+	Name: "bits.xor",
+	Decl: types.NewFunction(
+		types.Args(types.N, types.N),
+		types.N,
+	),
+}
+
+// BitsShiftLeft returns a new integer with its bits shifted some value to the
+// left.
+var BitsShiftLeft = &Builtin{
+	Name: "bits.lsh",
+	Decl: types.NewFunction(
+		types.Args(types.N, types.N),
+		types.N,
+	),
+}
+
+// BitsShiftRight returns a new integer with its bits shifted some value to the
+// right.
+var BitsShiftRight = &Builtin{
+	Name: "bits.rsh",
+	Decl: types.NewFunction(
+		types.Args(types.N, types.N),
+		types.N,
+	),
+}
+
+/**
+ * Sets
+ */
 
 // And performs an intersection operation on sets.
 var And = &Builtin{
@@ -505,8 +631,21 @@ var ArrayConcat = &Builtin{
 	),
 }
 
+// ArraySlice returns a slice of a given array
+var ArraySlice = &Builtin{
+	Name: "array.slice",
+	Decl: types.NewFunction(
+		types.Args(
+			types.NewArray(nil, types.A),
+			types.NewNumber(),
+			types.NewNumber(),
+		),
+		types.NewArray(nil, types.A),
+	),
+}
+
 /**
- * Casting
+ * Conversions
  */
 
 // ToNumber takes a string, bool, or number value and converts it to a number.
@@ -527,65 +666,6 @@ var ToNumber = &Builtin{
 	),
 }
 
-// CastArray checks the underlying type of the input. If it is array or set, an array
-// containing the values is returned. If it is not an array, an error is thrown.
-var CastArray = &Builtin{
-	Name: "cast_array",
-	Decl: types.NewFunction(
-		types.Args(types.A),
-		types.NewArray(nil, types.A),
-	),
-}
-
-// CastSet checks the underlying type of the input.
-// If it is a set, the set is returned.
-// If it is an array, the array is returned in set form (all duplicates removed)
-// If neither, an error is thrown
-var CastSet = &Builtin{
-	Name: "cast_set",
-	Decl: types.NewFunction(
-		types.Args(types.A),
-		types.NewSet(types.A),
-	),
-}
-
-// CastString returns input if it is a string; if not returns error.
-// For formatting variables, see sprintf
-var CastString = &Builtin{
-	Name: "cast_string",
-	Decl: types.NewFunction(
-		types.Args(types.A),
-		types.S,
-	),
-}
-
-// CastBoolean returns input if it is a boolean; if not returns error.
-var CastBoolean = &Builtin{
-	Name: "cast_boolean",
-	Decl: types.NewFunction(
-		types.Args(types.A),
-		types.B,
-	),
-}
-
-// CastNull returns null if input is null; if not returns error.
-var CastNull = &Builtin{
-	Name: "cast_null",
-	Decl: types.NewFunction(
-		types.Args(types.A),
-		types.NewNull(),
-	),
-}
-
-// CastObject returns the given object if it is null; throws an error otherwise
-var CastObject = &Builtin{
-	Name: "cast_object",
-	Decl: types.NewFunction(
-		types.Args(types.A),
-		types.NewObject(nil, types.NewDynamicProperty(types.A, types.A)),
-	),
-}
-
 /**
  * Regular Expressions
  */
@@ -593,13 +673,39 @@ var CastObject = &Builtin{
 // RegexMatch takes two strings and evaluates to true if the string in the second
 // position matches the pattern in the first position.
 var RegexMatch = &Builtin{
-	Name: "re_match",
+	Name: "regex.match",
 	Decl: types.NewFunction(
 		types.Args(
 			types.S,
 			types.S,
 		),
 		types.B,
+	),
+}
+
+// RegexIsValid returns true if the regex pattern string is valid, otherwise false.
+var RegexIsValid = &Builtin{
+	Name: "regex.is_valid",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+		),
+		types.B,
+	),
+}
+
+// RegexFindAllStringSubmatch returns an array of all successive matches of the expression.
+// It takes two strings and a number, the pattern, the value and number of matches to
+// return, -1 means all matches.
+var RegexFindAllStringSubmatch = &Builtin{
+	Name: "regex.find_all_string_submatch_n",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+			types.N,
+		),
+		types.NewArray(nil, types.NewArray(nil, types.S)),
 	),
 }
 
@@ -618,7 +724,7 @@ var RegexTemplateMatch = &Builtin{
 	),
 }
 
-// RegexSplit splits the input string by the occurences of the given pattern.
+// RegexSplit splits the input string by the occurrences of the given pattern.
 var RegexSplit = &Builtin{
 	Name: "regex.split",
 	Decl: types.NewFunction(
@@ -797,13 +903,92 @@ var Replace = &Builtin{
 	),
 }
 
-// Trim returns the given string will all leading or trailing instances of the second
+// ReplaceN replaces a string from a list of old, new string pairs.
+// Replacements are performed in the order they appear in the target string, without overlapping matches.
+// The old string comparisons are done in argument order.
+var ReplaceN = &Builtin{
+	Name: "strings.replace_n",
+	Decl: types.NewFunction(
+		types.Args(
+			types.NewObject(
+				nil,
+				types.NewDynamicProperty(
+					types.S,
+					types.S)),
+			types.S,
+		),
+		types.S,
+	),
+}
+
+// Trim returns the given string with all leading or trailing instances of the second
 // argument removed.
 var Trim = &Builtin{
 	Name: "trim",
 	Decl: types.NewFunction(
 		types.Args(
 			types.S,
+			types.S,
+		),
+		types.S,
+	),
+}
+
+// TrimLeft returns the given string with all leading instances of second argument removed.
+var TrimLeft = &Builtin{
+	Name: "trim_left",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.S,
+	),
+}
+
+// TrimPrefix returns the given string without the second argument prefix string.
+// If the given string doesn't start with prefix, it is returned unchanged.
+var TrimPrefix = &Builtin{
+	Name: "trim_prefix",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.S,
+	),
+}
+
+// TrimRight returns the given string with all trailing instances of second argument removed.
+var TrimRight = &Builtin{
+	Name: "trim_right",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.S,
+	),
+}
+
+// TrimSuffix returns the given string without the second argument suffix string.
+// If the given string doesn't end with suffix, it is returned unchanged.
+var TrimSuffix = &Builtin{
+	Name: "trim_suffix",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.S,
+	),
+}
+
+// TrimSpace return the given string with all leading and trailing white space removed.
+var TrimSpace = &Builtin{
+	Name: "trim_space",
+	Decl: types.NewFunction(
+		types.Args(
 			types.S,
 		),
 		types.S,
@@ -818,6 +1003,52 @@ var Sprintf = &Builtin{
 			types.S,
 			types.NewArray(nil, types.A),
 		),
+		types.S,
+	),
+}
+
+/**
+ * Numbers
+ */
+
+// NumbersRange returns an array of numbers in the given inclusive range.
+var NumbersRange = &Builtin{
+	Name: "numbers.range",
+	Decl: types.NewFunction(
+		types.Args(
+			types.N,
+			types.N,
+		),
+		types.NewArray(nil, types.N),
+	),
+}
+
+/**
+ * Units
+ */
+
+// UnitsParseBytes converts strings like 10GB, 5K, 4mb, and the like into an
+// integer number of bytes.
+var UnitsParseBytes = &Builtin{
+	Name: "units.parse_bytes",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+		),
+		types.N,
+	),
+}
+
+//
+/**
+ * Type
+ */
+
+// UUIDRFC4122 returns a version 4 UUID string.
+var UUIDRFC4122 = &Builtin{
+	Name: "uuid.rfc4122",
+	Decl: types.NewFunction(
+		types.Args(types.S),
 		types.S,
 	),
 }
@@ -844,6 +1075,146 @@ var JSONUnmarshal = &Builtin{
 	),
 }
 
+// JSONFilter filters the JSON object
+var JSONFilter = &Builtin{
+	Name: "json.filter",
+	Decl: types.NewFunction(
+		types.Args(
+			types.NewObject(
+				nil,
+				types.NewDynamicProperty(types.A, types.A),
+			),
+			types.NewAny(
+				types.NewArray(
+					nil,
+					types.NewAny(
+						types.S,
+						types.NewArray(
+							nil,
+							types.A,
+						),
+					),
+				),
+				types.NewSet(
+					types.NewAny(
+						types.S,
+						types.NewArray(
+							nil,
+							types.A,
+						),
+					),
+				),
+			),
+		),
+		types.A,
+	),
+}
+
+// JSONRemove removes paths in the JSON object
+var JSONRemove = &Builtin{
+	Name: "json.remove",
+	Decl: types.NewFunction(
+		types.Args(
+			types.NewObject(
+				nil,
+				types.NewDynamicProperty(types.A, types.A),
+			),
+			types.NewAny(
+				types.NewArray(
+					nil,
+					types.NewAny(
+						types.S,
+						types.NewArray(
+							nil,
+							types.A,
+						),
+					),
+				),
+				types.NewSet(
+					types.NewAny(
+						types.S,
+						types.NewArray(
+							nil,
+							types.A,
+						),
+					),
+				),
+			),
+		),
+		types.A,
+	),
+}
+
+// ObjectGet returns takes an object and returns a value under its key if
+// present, otherwise it returns the default.
+var ObjectGet = &Builtin{
+	Name: "object.get",
+	Decl: types.NewFunction(
+		types.Args(
+			types.NewObject(nil, types.NewDynamicProperty(types.A, types.A)),
+			types.A,
+			types.A,
+		),
+		types.A,
+	),
+}
+
+// ObjectUnion creates a new object that is the asymmetric union of two objects
+var ObjectUnion = &Builtin{
+	Name: "object.union",
+	Decl: types.NewFunction(
+		types.Args(
+			types.NewObject(
+				nil,
+				types.NewDynamicProperty(types.A, types.A),
+			),
+			types.NewObject(
+				nil,
+				types.NewDynamicProperty(types.A, types.A),
+			),
+		),
+		types.A,
+	),
+}
+
+// ObjectRemove Removes specified keys from an object
+var ObjectRemove = &Builtin{
+	Name: "object.remove",
+	Decl: types.NewFunction(
+		types.Args(
+			types.NewObject(
+				nil,
+				types.NewDynamicProperty(types.A, types.A),
+			),
+			types.NewAny(
+				types.NewArray(nil, types.A),
+				types.NewSet(types.A),
+				types.NewObject(nil, types.NewDynamicProperty(types.A, types.A)),
+			),
+		),
+		types.A,
+	),
+}
+
+// ObjectFilter filters the object by keeping only specified keys
+var ObjectFilter = &Builtin{
+	Name: "object.filter",
+	Decl: types.NewFunction(
+		types.Args(
+			types.NewObject(
+				nil,
+				types.NewDynamicProperty(types.A, types.A),
+			),
+			types.NewAny(
+				types.NewArray(nil, types.A),
+				types.NewSet(types.A),
+				types.NewObject(nil, types.NewDynamicProperty(types.A, types.A)),
+			),
+		),
+		types.A,
+	),
+}
+
 // Base64Encode serializes the input string into base64 encoding.
 var Base64Encode = &Builtin{
 	Name: "base64.encode",
@@ -859,6 +1230,15 @@ var Base64Decode = &Builtin{
 	Decl: types.NewFunction(
 		types.Args(types.S),
 		types.S,
+	),
+}
+
+// Base64IsValid verifies the input string is base64 encoded.
+var Base64IsValid = &Builtin{
+	Name: "base64.is_valid",
+	Decl: types.NewFunction(
+		types.Args(types.S),
+		types.B,
 	),
 }
 
@@ -915,6 +1295,17 @@ var URLQueryEncodeObject = &Builtin{
 	),
 }
 
+// URLQueryDecodeObject decodes the given URL query string into an object.
+var URLQueryDecodeObject = &Builtin{
+	Name: "urlquery.decode_object",
+	Decl: types.NewFunction(
+		types.Args(types.S),
+		types.NewObject(nil, types.NewDynamicProperty(
+			types.S,
+			types.NewArray(nil, types.S))),
+	),
+}
+
 // YAMLMarshal serializes the input term.
 var YAMLMarshal = &Builtin{
 	Name: "yaml.marshal",
@@ -962,9 +1353,57 @@ var JWTVerifyRS256 = &Builtin{
 	),
 }
 
+// JWTVerifyRS384 verifies if a RS384 JWT signature is valid or not.
+var JWTVerifyRS384 = &Builtin{
+	Name: "io.jwt.verify_rs384",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.B,
+	),
+}
+
+// JWTVerifyRS512 verifies if a RS512 JWT signature is valid or not.
+var JWTVerifyRS512 = &Builtin{
+	Name: "io.jwt.verify_rs512",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.B,
+	),
+}
+
 // JWTVerifyPS256 verifies if a PS256 JWT signature is valid or not.
 var JWTVerifyPS256 = &Builtin{
 	Name: "io.jwt.verify_ps256",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.B,
+	),
+}
+
+// JWTVerifyPS384 verifies if a PS384 JWT signature is valid or not.
+var JWTVerifyPS384 = &Builtin{
+	Name: "io.jwt.verify_ps384",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.B,
+	),
+}
+
+// JWTVerifyPS512 verifies if a PS512 JWT signature is valid or not.
+var JWTVerifyPS512 = &Builtin{
+	Name: "io.jwt.verify_ps512",
 	Decl: types.NewFunction(
 		types.Args(
 			types.S,
@@ -986,9 +1425,57 @@ var JWTVerifyES256 = &Builtin{
 	),
 }
 
+// JWTVerifyES384 verifies if a ES384 JWT signature is valid or not.
+var JWTVerifyES384 = &Builtin{
+	Name: "io.jwt.verify_es384",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.B,
+	),
+}
+
+// JWTVerifyES512 verifies if a ES512 JWT signature is valid or not.
+var JWTVerifyES512 = &Builtin{
+	Name: "io.jwt.verify_es512",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.B,
+	),
+}
+
 // JWTVerifyHS256 verifies if a HS256 (secret) JWT signature is valid or not.
 var JWTVerifyHS256 = &Builtin{
 	Name: "io.jwt.verify_hs256",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.B,
+	),
+}
+
+// JWTVerifyHS384 verifies if a HS384 (secret) JWT signature is valid or not.
+var JWTVerifyHS384 = &Builtin{
+	Name: "io.jwt.verify_hs384",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.B,
+	),
+}
+
+// JWTVerifyHS512 verifies if a HS512 (secret) JWT signature is valid or not.
+var JWTVerifyHS512 = &Builtin{
+	Name: "io.jwt.verify_hs512",
 	Decl: types.NewFunction(
 		types.Args(
 			types.S,
@@ -1011,6 +1498,34 @@ var JWTDecodeVerify = &Builtin{
 			types.NewObject(nil, types.NewDynamicProperty(types.A, types.A)),
 			types.NewObject(nil, types.NewDynamicProperty(types.A, types.A)),
 		}, nil),
+	),
+}
+
+// JWTEncodeSignRaw encodes and optionally sign  a JSON Web Token.
+// Inputs are protected headers, payload, secret
+var JWTEncodeSignRaw = &Builtin{
+	Name: "io.jwt.encode_sign_raw",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+			types.S,
+		),
+		types.S,
+	),
+}
+
+// JWTEncodeSign encodes and optionally sign  a JSON Web Token.
+// Inputs are protected headers, payload, secret
+var JWTEncodeSign = &Builtin{
+	Name: "io.jwt.encode_sign",
+	Decl: types.NewFunction(
+		types.Args(
+			types.NewObject(nil, types.NewDynamicProperty(types.S, types.A)),
+			types.NewObject(nil, types.NewDynamicProperty(types.S, types.A)),
+			types.NewObject(nil, types.NewDynamicProperty(types.S, types.A)),
+		),
+		types.S,
 	),
 }
 
@@ -1062,7 +1577,12 @@ var ParseDurationNanos = &Builtin{
 var Date = &Builtin{
 	Name: "time.date",
 	Decl: types.NewFunction(
-		types.Args(types.N),
+		types.Args(
+			types.NewAny(
+				types.N,
+				types.NewArray([]types.Type{types.N, types.S}, nil),
+			),
+		),
 		types.NewArray([]types.Type{types.N, types.N, types.N}, nil),
 	),
 }
@@ -1071,7 +1591,12 @@ var Date = &Builtin{
 var Clock = &Builtin{
 	Name: "time.clock",
 	Decl: types.NewFunction(
-		types.Args(types.N),
+		types.Args(
+			types.NewAny(
+				types.N,
+				types.NewArray([]types.Type{types.N, types.S}, nil),
+			),
+		),
 		types.NewArray([]types.Type{types.N, types.N, types.N}, nil),
 	),
 }
@@ -1080,8 +1605,27 @@ var Clock = &Builtin{
 var Weekday = &Builtin{
 	Name: "time.weekday",
 	Decl: types.NewFunction(
-		types.Args(types.N),
+		types.Args(
+			types.NewAny(
+				types.N,
+				types.NewArray([]types.Type{types.N, types.S}, nil),
+			),
+		),
 		types.S,
+	),
+}
+
+// AddDate returns the nanoseconds since epoch after adding years, months and days to nanoseconds.
+var AddDate = &Builtin{
+	Name: "time.add_date",
+	Decl: types.NewFunction(
+		types.Args(
+			types.N,
+			types.N,
+			types.N,
+			types.N,
+		),
+		types.N,
 	),
 }
 
@@ -1097,6 +1641,43 @@ var CryptoX509ParseCertificates = &Builtin{
 	Decl: types.NewFunction(
 		types.Args(types.S),
 		types.NewArray(nil, types.NewObject(nil, types.NewDynamicProperty(types.S, types.A))),
+	),
+}
+
+// CryptoX509ParseCertificateRequest returns a PKCS #10 certificate signing
+// request from the given PEM-encoded PKCS#10 certificate signing request.
+var CryptoX509ParseCertificateRequest = &Builtin{
+	Name: "crypto.x509.parse_certificate_request",
+	Decl: types.NewFunction(
+		types.Args(types.S),
+		types.NewObject(nil, types.NewDynamicProperty(types.S, types.A)),
+	),
+}
+
+// CryptoMd5 returns a string representing the input string hashed with the md5 function
+var CryptoMd5 = &Builtin{
+	Name: "crypto.md5",
+	Decl: types.NewFunction(
+		types.Args(types.S),
+		types.S,
+	),
+}
+
+// CryptoSha1 returns a string representing the input string hashed with the sha1 function
+var CryptoSha1 = &Builtin{
+	Name: "crypto.sha1",
+	Decl: types.NewFunction(
+		types.Args(types.S),
+		types.S,
+	),
+}
+
+// CryptoSha256 returns a string representing the input string hashed with the sha256 function
+var CryptoSha256 = &Builtin{
+	Name: "crypto.sha256",
+	Decl: types.NewFunction(
+		types.Args(types.S),
+		types.S,
 	),
 }
 
@@ -1118,6 +1699,26 @@ var WalkBuiltin = &Builtin{
 			},
 			nil,
 		),
+	),
+}
+
+// ReachableBuiltin computes the set of reachable nodes in the graph from a set
+// of starting nodes.
+var ReachableBuiltin = &Builtin{
+	Name: "graph.reachable",
+	Decl: types.NewFunction(
+		types.Args(
+			types.NewObject(
+				nil,
+				types.NewDynamicProperty(
+					types.A,
+					types.NewAny(
+						types.NewSet(types.A),
+						types.NewArray(nil, types.A)),
+				)),
+			types.NewAny(types.NewSet(types.A), types.NewArray(nil, types.A)),
+		),
+		types.NewSet(types.A),
 	),
 }
 
@@ -1356,15 +1957,110 @@ var GlobQuoteMeta = &Builtin{
  * Net CIDR
  */
 
-// NetCIDROverlap checks if an ip overlaps with cidr and returns true or false
-var NetCIDROverlap = &Builtin{
-	Name: "net.cidr_overlap",
+// NetCIDRIntersects checks if a cidr intersects with another cidr and returns true or false
+var NetCIDRIntersects = &Builtin{
+	Name: "net.cidr_intersects",
 	Decl: types.NewFunction(
 		types.Args(
 			types.S,
 			types.S,
 		),
 		types.B,
+	),
+}
+
+// NetCIDRExpand returns a set of hosts inside the specified cidr.
+var NetCIDRExpand = &Builtin{
+	Name: "net.cidr_expand",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+		),
+		types.NewSet(types.S),
+	),
+}
+
+// NetCIDRContains checks if a cidr or ip is contained within another cidr and returns true or false
+var NetCIDRContains = &Builtin{
+	Name: "net.cidr_contains",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.B,
+	),
+}
+
+// NetCIDRContainsMatches checks if collections of cidrs or ips are contained within another collection of cidrs and returns matches.
+var NetCIDRContainsMatches = &Builtin{
+	Name: "net.cidr_contains_matches",
+	Decl: types.NewFunction(
+		types.Args(netCidrContainsMatchesOperandType, netCidrContainsMatchesOperandType),
+		types.NewSet(types.NewArray([]types.Type{types.A, types.A}, nil)),
+	),
+}
+
+// NetCIDRMerge merges IP addresses and subnets into the smallest possible list of CIDRs.
+var NetCIDRMerge = &Builtin{
+	Name: "net.cidr_merge",
+	Decl: types.NewFunction(
+		types.Args(netCidrMergeOperandType),
+		types.NewSet(types.S),
+	),
+}
+
+var netCidrMergeOperandType = types.NewAny(
+	types.NewArray(nil, types.NewAny(types.S)),
+	types.NewSet(types.S),
+)
+
+var netCidrContainsMatchesOperandType = types.NewAny(
+	types.S,
+	types.NewArray(nil, types.NewAny(
+		types.S,
+		types.NewArray(nil, types.A),
+	)),
+	types.NewSet(types.NewAny(
+		types.S,
+		types.NewArray(nil, types.A),
+	)),
+	types.NewObject(nil, types.NewDynamicProperty(
+		types.S,
+		types.NewAny(
+			types.S,
+			types.NewArray(nil, types.A),
+		),
+	)),
+)
+
+/**
+ * Semantic Versions
+ */
+
+// SemVerIsValid validiates a the term is a valid SemVer as a string, returns
+// false for all other input
+var SemVerIsValid = &Builtin{
+	Name: "semver.is_valid",
+	Decl: types.NewFunction(
+		types.Args(
+			types.A,
+		),
+		types.B,
+	),
+}
+
+// SemVerCompare compares valid SemVer formatted version strings. Given two
+// version strings, if A < B returns -1, if A > B returns 1. If A == B, returns
+// 0
+var SemVerCompare = &Builtin{
+	Name: "semver.compare",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.N,
 	),
 }
 
@@ -1384,13 +2080,96 @@ var SetDiff = &Builtin{
 	),
 }
 
+// NetCIDROverlap has been replaced by the `net.cidr_contains` built-in.
+var NetCIDROverlap = &Builtin{
+	Name: "net.cidr_overlap",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.B,
+	),
+}
+
+// CastArray checks the underlying type of the input. If it is array or set, an array
+// containing the values is returned. If it is not an array, an error is thrown.
+var CastArray = &Builtin{
+	Name: "cast_array",
+	Decl: types.NewFunction(
+		types.Args(types.A),
+		types.NewArray(nil, types.A),
+	),
+}
+
+// CastSet checks the underlying type of the input.
+// If it is a set, the set is returned.
+// If it is an array, the array is returned in set form (all duplicates removed)
+// If neither, an error is thrown
+var CastSet = &Builtin{
+	Name: "cast_set",
+	Decl: types.NewFunction(
+		types.Args(types.A),
+		types.NewSet(types.A),
+	),
+}
+
+// CastString returns input if it is a string; if not returns error.
+// For formatting variables, see sprintf
+var CastString = &Builtin{
+	Name: "cast_string",
+	Decl: types.NewFunction(
+		types.Args(types.A),
+		types.S,
+	),
+}
+
+// CastBoolean returns input if it is a boolean; if not returns error.
+var CastBoolean = &Builtin{
+	Name: "cast_boolean",
+	Decl: types.NewFunction(
+		types.Args(types.A),
+		types.B,
+	),
+}
+
+// CastNull returns null if input is null; if not returns error.
+var CastNull = &Builtin{
+	Name: "cast_null",
+	Decl: types.NewFunction(
+		types.Args(types.A),
+		types.NewNull(),
+	),
+}
+
+// CastObject returns the given object if it is null; throws an error otherwise
+var CastObject = &Builtin{
+	Name: "cast_object",
+	Decl: types.NewFunction(
+		types.Args(types.A),
+		types.NewObject(nil, types.NewDynamicProperty(types.A, types.A)),
+	),
+}
+
+// RegexMatchDeprecated declares `re_match` which has been deprecated. Use `regex.match` instead.
+var RegexMatchDeprecated = &Builtin{
+	Name: "re_match",
+	Decl: types.NewFunction(
+		types.Args(
+			types.S,
+			types.S,
+		),
+		types.B,
+	),
+}
+
 // Builtin represents a built-in function supported by OPA. Every built-in
 // function is uniquely identified by a name.
 type Builtin struct {
-	Name     string          // Unique name of built-in function, e.g., <name>(arg1,arg2,...,argN)
-	Infix    string          // Unique name of infix operator. Default should be unset.
-	Decl     *types.Function // Built-in function type declaration.
-	Relation bool            // Indicates if the built-in acts as a relation.
+	Name     string          `json:"name"`               // Unique name of built-in function, e.g., <name>(arg1,arg2,...,argN)
+	Decl     *types.Function `json:"decl"`               // Built-in function type declaration.
+	Infix    string          `json:"infix,omitempty"`    // Unique name of infix operator. Default should be unset.
+	Relation bool            `json:"relation,omitempty"` // Indicates if the built-in acts as a relation.
 }
 
 // Expr creates a new expression for the built-in with the given operands.

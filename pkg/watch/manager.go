@@ -1,467 +1,362 @@
+/*
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package watch
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"reflect"
-	"strings"
 	"sync"
-	"time"
 
-	errp "github.com/pkg/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"golang.org/x/sync/errgroup"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/discovery"
-	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
-	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 )
 
-var log = logf.Log.WithName("watchManager")
+var log = logf.Log.WithName("watch-manager")
 
-// WatchManager allows us to dynamically configure what kinds are watched
-type WatchManager struct {
-	newMgrFn   func(*WatchManager) (manager.Manager, error)
-	startedMux sync.RWMutex
-	stopper    chan struct{}
+// Manager allows us to dynamically configure what kinds are watched
+type Manager struct {
+	cache      RemovableCache
+	startedMux sync.Mutex
 	stopped    chan struct{}
-	started    bool
-	paused     bool
+	// started is a bool
+	started bool
 	// managedKinds stores the kinds that should be managed, mapping CRD Kind to CRD Name
 	managedKinds *recordKeeper
+	watchedMux   sync.RWMutex
 	// watchedKinds are the kinds that have a currently running constraint controller
-	watchedKinds map[schema.GroupVersionKind]watchVitals
-	cfg          *rest.Config
-	newDiscovery func(*rest.Config) (Discovery, error)
+	watchedKinds vitalsByGVK
+	metrics      *reporter
+
+	// Events are passed internally from informer event handlers to handleEvents for distribution.
+	events chan interface{}
+	// replayRequests is used to request or cancel replay for a registrar joining an existing watch.
+	replayRequests chan replayRequest
 }
 
-type Discovery interface {
-	ServerResourcesForGroupVersion(string) (*metav1.APIResourceList, error)
+type AddFunction func(manager.Manager) error
+
+// RemovableCache is a subset variant of the cache.Cache interface.
+// It supports non-blocking calls to get informers, as well as the
+// ability to remove an informer dynamically.
+type RemovableCache interface {
+	GetInformerNonBlocking(obj client.Object) (cache.Informer, error)
+	List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error
+	Remove(obj client.Object) error
 }
 
-// newDiscovery gets around the lack of interface inference when analyzing function signatures
-func newDiscovery(c *rest.Config) (Discovery, error) {
-	return discovery.NewDiscoveryClientForConfig(c)
-}
-
-func New(ctx context.Context, cfg *rest.Config) *WatchManager {
-	wm := &WatchManager{
-		newMgrFn:     newMgr,
-		stopper:      make(chan struct{}),
-		stopped:      make(chan struct{}),
-		managedKinds: newRecordKeeper(),
-		watchedKinds: make(map[schema.GroupVersionKind]watchVitals),
-		cfg:          cfg,
-		newDiscovery: newDiscovery,
-	}
-	wm.managedKinds.mgr = wm
-	go wm.updateManagerLoop(ctx)
-	return wm
-}
-
-func (wm *WatchManager) NewRegistrar(parent string, addFns []func(manager.Manager, schema.GroupVersionKind) error) (*Registrar, error) {
-	return wm.managedKinds.NewRegistrar(parent, addFns)
-}
-
-func newMgr(wm *WatchManager) (manager.Manager, error) {
-	log.Info("setting up watch manager")
-	mgr, err := manager.New(wm.cfg, manager.Options{})
-	if err != nil {
-		log.Error(err, "unable to set up watch manager")
-		os.Exit(1)
-	}
-
-	return mgr, nil
-}
-
-func (wm *WatchManager) addWatch(gvk schema.GroupVersionKind, registrar *Registrar) error {
-	wv := watchVitals{
-		gvk:        gvk,
-		registrars: map[*Registrar]bool{registrar: true},
-	}
-	wm.managedKinds.Update(map[string]map[schema.GroupVersionKind]watchVitals{registrar.parentName: {gvk: wv}})
-	return nil
-}
-
-func (wm *WatchManager) replaceWatchSet(gvks []schema.GroupVersionKind, registrar *Registrar) error {
-	roster := make(map[schema.GroupVersionKind]watchVitals)
-	for _, gvk := range gvks {
-		wv := watchVitals{
-			gvk:        gvk,
-			registrars: map[*Registrar]bool{registrar: true},
-		}
-		roster[gvk] = wv
-	}
-	wm.managedKinds.ReplaceRegistrarRoster(registrar, roster)
-	return nil
-}
-
-func (wm *WatchManager) removeWatch(gvk schema.GroupVersionKind, registrar *Registrar) error {
-	wm.managedKinds.Remove(map[string][]schema.GroupVersionKind{registrar.parentName: {gvk}})
-	return nil
-}
-
-// updateManager scans for changes to the watch list and restarts the manager if any are detected
-func (wm *WatchManager) updateManager() (bool, error) {
-	intent := wm.managedKinds.Get()
-	added, removed, changed, err := wm.gatherChanges(intent)
-	if err != nil {
-		return false, errp.Wrap(err, "error gathering watch changes, not restarting watch manager")
-	}
-	if wm.started == true && len(added) == 0 && len(removed) == 0 && len(changed) == 0 {
-		return false, nil
-	}
-	var a, r, c []string
-	for k, _ := range added {
-		a = append(a, k.String())
-	}
-	for k, _ := range removed {
-		r = append(r, k.String())
-	}
-	for k, _ := range changed {
-		a = append(c, k.String())
-	}
-	log.Info("Watcher registry found changes and/or needs restarting", "started", wm.started, "add", a, "remove", r, "change", c)
-
-	readyToAdd, err := wm.filterPendingResources(added)
-	if err != nil {
-		return false, errp.Wrap(err, "could not filter pending resources, not restarting watch manager")
-	}
-
-	if wm.started == true && len(readyToAdd) == 0 && len(removed) == 0 && len(changed) == 0 {
-		log.Info("Only changes are pending additions; not restarting watch manager")
-		return false, nil
-	}
-
-	newWatchedKinds := make(map[schema.GroupVersionKind]watchVitals)
-	for gvk, vitals := range wm.watchedKinds {
-		if _, ok := removed[gvk]; !ok {
-			if newVitals, ok := changed[gvk]; ok {
-				newWatchedKinds[gvk] = newVitals
-			} else {
-				newWatchedKinds[gvk] = vitals
-			}
-		}
-	}
-
-	for gvk, vitals := range readyToAdd {
-		newWatchedKinds[gvk] = vitals
-	}
-
-	if err := wm.restartManager(newWatchedKinds); err != nil {
-		return false, errp.Wrap(err, "could not restart watch manager: %s")
-	}
-
-	wm.watchedKinds = newWatchedKinds
-	return true, nil
-}
-
-// updateManagerLoop looks for changes to the watch roster every 5 seconds. This method has a dual
-// benefit compared to restarting the manager every time a controller changes the watch
-// of placing an upper bound on how often the manager restarts and allowing the manager to
-// catch changes to the CRD version, will break the watch if it is not updated.
-func (wm *WatchManager) updateManagerLoop(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			wm.Close()
-			return
-		default:
-			time.Sleep(5 * time.Second)
-			if _, err := wm.updateOrPause(); err != nil {
-				log.Error(err, "error in updateManagerLoop")
-			}
-		}
-	}
-}
-
-// updateOrPause() wraps the update function, allowing us to check if the manager is paused in
-// a thread-safe manner
-func (wm *WatchManager) updateOrPause() (bool, error) {
-	wm.startedMux.Lock()
-	defer wm.startedMux.Unlock()
-	if wm.paused {
-		log.Info("update manager is paused")
-		return false, nil
-	}
-	return wm.updateManager()
-}
-
-// Pause the manager to prevent syncing while other things are happening, such as wiping
-// the data cache
-func (wm *WatchManager) Pause() error {
-	wm.startedMux.Lock()
-	defer wm.startedMux.Unlock()
-	if wm.started {
-		close(wm.stopper)
-		wm.stopper = make(chan struct{})
-		select {
-		case <-wm.stopped:
-		case <-time.After(10 * time.Second):
-			return errors.New("timeout waiting for watch manager to pause")
-		}
-	}
-	wm.paused = true
-	return nil
-}
-
-// Unpause the manager and start new watches
-func (wm *WatchManager) Unpause() error {
-	wm.startedMux.Lock()
-	defer wm.startedMux.Unlock()
-	wm.paused = false
-	return nil
-}
-
-// restartManager destroys the old manager and creates a new one watching the provided constraint
-// kinds
-func (wm *WatchManager) restartManager(kinds map[schema.GroupVersionKind]watchVitals) error {
-	var kindStr []string
-	for gvk := range kinds {
-		kindStr = append(kindStr, gvk.String())
-	}
-	log.Info("restarting Watch Manager", "kinds", strings.Join(kindStr, ", "))
-	close(wm.stopper)
-	// Only block on the old manager's exit if one has previously been started
-	if wm.started {
-		<-wm.stopped
-	}
-
-	wm.stopper = make(chan struct{})
-	wm.stopped = make(chan struct{})
-	mgr, err := wm.newMgrFn(wm)
-	if err != nil {
-		return err
-	}
-
-	for gvk, v := range kinds {
-		for _, fn := range v.addFns() {
-			if err := fn(mgr, gvk); err != nil {
-				return err
-			}
-		}
-	}
-
-	go wm.startMgr(mgr, wm.stopper, wm.stopped, kindStr)
-	return nil
-}
-
-func (wm *WatchManager) startMgr(mgr manager.Manager, stopper chan struct{}, stopped chan<- struct{}, kinds []string) {
-	log.Info("Calling Manager.Start()", "kinds", kinds)
-	wm.started = true
-	if err := mgr.Start(stopper); err != nil {
-		log.Error(err, "error starting watch manager")
-	}
-	// mgr.Start() only returns after the manager has completely stopped
-	close(stopped)
-	wm.started = false
-	log.Info("sub-manager exiting", "kinds", kinds)
-}
-
-// gatherChanges returns anything added, removed or changed since the last time the manager
-// was successfully started. It also returns any errors gathering the changes.
-func (wm *WatchManager) gatherChanges(managedKindsRaw map[string]map[schema.GroupVersionKind]watchVitals) (map[schema.GroupVersionKind]watchVitals, map[schema.GroupVersionKind]watchVitals, map[schema.GroupVersionKind]watchVitals, error) {
-	managedKinds := make(map[schema.GroupVersionKind]watchVitals)
-	for _, registrar := range managedKindsRaw {
-		for gvk, v := range registrar {
-			if mk, ok := managedKinds[gvk]; ok {
-				merged, err := mk.merge(v)
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				managedKinds[gvk] = merged
-			} else {
-				managedKinds[gvk] = v
-			}
-		}
-	}
-
-	added := make(map[schema.GroupVersionKind]watchVitals)
-	removed := make(map[schema.GroupVersionKind]watchVitals)
-	changed := make(map[schema.GroupVersionKind]watchVitals)
-	for gvk, vitals := range managedKinds {
-		if _, ok := wm.watchedKinds[gvk]; !ok {
-			added[gvk] = vitals
-		}
-	}
-	for gvk, vitals := range wm.watchedKinds {
-		if _, ok := managedKinds[gvk]; !ok {
-			removed[gvk] = vitals
-			continue
-		}
-		if !reflect.DeepEqual(wm.watchedKinds[gvk].registrars, managedKinds[gvk].registrars) {
-			changed[gvk] = managedKinds[gvk]
-			// Do not clobber the newly added registrar
-			vitals = managedKinds[gvk]
-		}
-	}
-	return added, removed, changed, nil
-}
-
-func (wm *WatchManager) filterPendingResources(kinds map[schema.GroupVersionKind]watchVitals) (map[schema.GroupVersionKind]watchVitals, error) {
-	gvs := make(map[schema.GroupVersion]bool)
-	for gvk, _ := range kinds {
-		gvs[gvk.GroupVersion()] = true
-	}
-
-	discovery, err := wm.newDiscovery(wm.cfg)
+func New(c RemovableCache) (*Manager, error) {
+	metrics, err := newStatsReporter()
 	if err != nil {
 		return nil, err
 	}
-	liveResources := make(map[schema.GroupVersionKind]watchVitals)
-	for gv, _ := range gvs {
-		rsrs, err := discovery.ServerResourcesForGroupVersion(gv.String())
-		if err != nil {
-			return nil, err
+	recordKeeper, err := newRecordKeeper()
+	if err != nil {
+		return nil, err
+	}
+	wm := &Manager{
+		cache:          c,
+		stopped:        make(chan struct{}),
+		managedKinds:   recordKeeper,
+		watchedKinds:   make(vitalsByGVK),
+		metrics:        metrics,
+		events:         make(chan interface{}, 1024),
+		replayRequests: make(chan replayRequest),
+	}
+	wm.managedKinds.mgr = wm
+	return wm, nil
+}
+
+func (wm *Manager) NewRegistrar(parent string, events chan<- event.GenericEvent) (*Registrar, error) {
+	return wm.managedKinds.NewRegistrar(parent, events)
+}
+
+// RemoveRegistrar removes a registrar and all its watches.
+func (wm *Manager) RemoveRegistrar(parentName string) error {
+	return wm.managedKinds.RemoveRegistrar(parentName)
+}
+
+// Start runs the watch manager, processing events received from dynamic informers and distributing them
+// to registrars.
+func (wm *Manager) Start(ctx context.Context) error {
+	if err := wm.checkStarted(); err != nil {
+		return err
+	}
+
+	grp, ctx := errgroup.WithContext(ctx)
+	grp.Go(func() error {
+		<-ctx.Done()
+		// Unblock any informer event handlers
+		close(wm.stopped)
+		return context.Canceled
+	})
+	// Routine for distributing events to listeners.
+	grp.Go(func() error {
+		wm.eventLoop(ctx.Done())
+		return context.Canceled
+	})
+	// Routine for asynchronous replay of past events to joining listeners.
+	grp.Go(wm.replayEventsLoop)
+	_ = grp.Wait()
+	return nil
+}
+
+func (wm *Manager) checkStarted() error {
+	wm.startedMux.Lock()
+	defer wm.startedMux.Unlock()
+	if wm.started {
+		return errors.New("already started")
+	}
+	wm.started = true
+	return nil
+}
+
+func (wm *Manager) GetManagedGVK() []schema.GroupVersionKind {
+	return wm.managedKinds.GetGVK()
+}
+
+func (wm *Manager) addWatch(r *Registrar, gvk schema.GroupVersionKind) error {
+	wm.watchedMux.Lock()
+	defer wm.watchedMux.Unlock()
+	return wm.doAddWatch(r, gvk)
+}
+
+func (wm *Manager) doAddWatch(r *Registrar, gvk schema.GroupVersionKind) error {
+	// lock acquired by caller
+
+	if r == nil {
+		return fmt.Errorf("nil registrar cannot watch")
+	}
+
+	// watchers is everyone who is *already* watching.
+	watchers := wm.watchedKinds[gvk]
+
+	// m is everyone who *wants* to watch.
+	m := wm.managedKinds.Get() // Not a deadlock but beware if assumptions change...
+	if _, ok := m[gvk]; !ok {
+		return fmt.Errorf("could not mark %+v as managed", gvk)
+	}
+
+	// Sanity
+	if !m[gvk].registrars[r] {
+		return fmt.Errorf("registrar %s not in desired watch set", r.parentName)
+	}
+
+	if watchers.registrars[r] {
+		// Already watching.
+		return nil
+	}
+
+	switch {
+	case len(watchers.registrars) > 0:
+		// Someone else was watching, replay events in the cache to the new watcher.
+		wm.requestReplay(r, gvk)
+	default:
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(gvk)
+		informer, err := wm.cache.GetInformerNonBlocking(u)
+		if err != nil || informer == nil {
+			// This is expected to fail if a CRD is unregistered.
+			return fmt.Errorf("getting informer for kind: %+v %w", gvk, err)
 		}
-		for _, r := range rsrs.APIResources {
-			gvk := gv.WithKind(r.Kind)
-			if wv, ok := kinds[gvk]; ok {
-				liveResources[gvk] = wv
+
+		// First watcher gets a fresh informer, register for events.
+		informer.AddEventHandler(wm)
+	}
+
+	// Mark it as watched.
+	wv := vitals{
+		gvk:        gvk,
+		registrars: map[*Registrar]bool{r: true},
+	}
+	wm.watchedKinds[gvk] = watchers.merge(wv)
+	if err := wm.metrics.reportGvkCount(int64(len(wm.watchedKinds))); err != nil {
+		log.Error(err, "while trying to report gvk count metric")
+	}
+	return nil
+}
+
+func (wm *Manager) removeWatch(r *Registrar, gvk schema.GroupVersionKind) error {
+	wm.watchedMux.Lock()
+	defer wm.watchedMux.Unlock()
+	return wm.doRemoveWatch(r, gvk)
+}
+
+func (wm *Manager) doRemoveWatch(r *Registrar, gvk schema.GroupVersionKind) error {
+	// lock acquired by caller
+
+	v, ok := wm.watchedKinds[gvk]
+	if !ok || !v.registrars[r] {
+		// Not watching.
+		return nil
+	}
+
+	// Cancel any replays that may be pending
+	wm.cancelReplay(r, gvk)
+
+	// Remove this registrar from the watch list
+	delete(v.registrars, r)
+
+	// Skip if there are additional watchers that would prevent us from removing it
+	if len(v.registrars) > 0 {
+		return nil
+	}
+
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(gvk)
+	if err := wm.cache.Remove(u); err != nil {
+		return fmt.Errorf("removing %+v: %w", gvk, err)
+	}
+	delete(wm.watchedKinds, gvk)
+	if err := wm.metrics.reportGvkCount(int64(len(wm.watchedKinds))); err != nil {
+		log.Error(err, "while trying to report gvk count metric")
+	}
+	return nil
+}
+
+// replaceWatches ensures all and only desired watches are running.
+func (wm *Manager) replaceWatches(r *Registrar) error {
+	wm.watchedMux.Lock()
+	defer wm.watchedMux.Unlock()
+
+	var errlist errorList
+
+	desired := wm.managedKinds.Get()
+	for gvk := range wm.watchedKinds {
+		if v, ok := desired[gvk]; ok && v.registrars[r] {
+			// This registrar still desires this gvk, skip.
+			continue
+		}
+		if err := wm.doRemoveWatch(r, gvk); err != nil {
+			errlist = append(errlist, fmt.Errorf("removing watch for %+v %w", gvk, err))
+		}
+	}
+
+	// Add desired watches. This is idempotent for existing watches.
+	for gvk, v := range desired {
+		if !v.registrars[r] {
+			continue
+		}
+		if err := wm.doAddWatch(r, gvk); err != nil {
+			errlist = append(errlist, fmt.Errorf("adding watch for %+v %w", gvk, err))
+		}
+	}
+
+	if err := wm.metrics.reportGvkCount(int64(len(wm.watchedKinds))); err != nil {
+		log.Error(err, "while trying to report gvk count metric")
+	}
+
+	if errlist != nil {
+		return errlist
+	}
+	return nil
+}
+
+// OnAdd implements cache.ResourceEventHandler. Called by informers.
+func (wm *Manager) OnAdd(obj interface{}) {
+	// Send event to eventLoop() for processing
+	select {
+	case wm.events <- obj:
+	case <-wm.stopped:
+	}
+}
+
+// OnUpdate implements cache.ResourceEventHandler. Called by informers.
+func (wm *Manager) OnUpdate(oldObj, newObj interface{}) {
+	// Send event to eventLoop() for processing
+	select {
+	case wm.events <- oldObj:
+	case <-wm.stopped:
+	}
+	select {
+	case wm.events <- newObj:
+	case <-wm.stopped:
+	}
+}
+
+// OnDelete implements cache.ResourceEventHandler. Called by informers.
+func (wm *Manager) OnDelete(obj interface{}) {
+	// Send event to eventLoop() for processing
+	select {
+	case wm.events <- obj:
+	case <-wm.stopped:
+	}
+}
+
+// eventLoop receives events from informer callbacks and distributes them to registrars.
+func (wm *Manager) eventLoop(stop <-chan struct{}) {
+	for {
+		select {
+		case e, ok := <-wm.events:
+			if !ok {
+				return
 			}
-		}
-	}
-	return liveResources, nil
-}
-
-func (wm *WatchManager) Close() {
-	close(wm.stopper)
-}
-
-func (wm *WatchManager) GetManaged() map[string]map[schema.GroupVersionKind]watchVitals {
-	return wm.managedKinds.Get()
-}
-
-type watchVitals struct {
-	gvk        schema.GroupVersionKind
-	registrars map[*Registrar]bool
-}
-
-func (w *watchVitals) merge(wv watchVitals) (watchVitals, error) {
-	registrars := make(map[*Registrar]bool)
-	for r := range w.registrars {
-		registrars[r] = true
-	}
-	for r := range wv.registrars {
-		registrars[r] = true
-	}
-	return watchVitals{
-		gvk:        w.gvk,
-		registrars: registrars,
-	}, nil
-}
-
-func (w *watchVitals) addFns() []func(manager.Manager, schema.GroupVersionKind) error {
-	var addFns []func(manager.Manager, schema.GroupVersionKind) error
-	for r := range w.registrars {
-		addFns = append(addFns, r.addFns...)
-	}
-	return addFns
-}
-
-// recordKeeper holds the source of truth for the intended state of the manager
-// This is essentially a read/write lock on the wrapped map (the `intent` variable)
-type recordKeeper struct {
-	// map[registrarName][kind]
-	intent     map[string]map[schema.GroupVersionKind]watchVitals
-	intentMux  sync.RWMutex
-	registrars map[string]*Registrar
-	mgr        *WatchManager
-}
-
-func (r *recordKeeper) NewRegistrar(parentName string, addFns []func(manager.Manager, schema.GroupVersionKind) error) (*Registrar, error) {
-	r.intentMux.Lock()
-	defer r.intentMux.Unlock()
-	if _, ok := r.registrars[parentName]; ok {
-		return nil, fmt.Errorf("registrar for %s already exists", parentName)
-	}
-	addFnsCpy := make([]func(manager.Manager, schema.GroupVersionKind) error, len(addFns))
-	for i, v := range addFns {
-		addFnsCpy[i] = v
-	}
-	r.registrars[parentName] = &Registrar{
-		parentName: parentName,
-		addFns:     addFnsCpy,
-		mgr:        r.mgr,
-	}
-	return r.registrars[parentName], nil
-}
-
-func (r *recordKeeper) Update(u map[string]map[schema.GroupVersionKind]watchVitals) {
-	r.intentMux.Lock()
-	defer r.intentMux.Unlock()
-	for k := range u {
-		if _, ok := r.intent[k]; !ok {
-			r.intent[k] = make(map[schema.GroupVersionKind]watchVitals)
-		}
-		for k2, v := range u[k] {
-			r.intent[k][k2] = v
+			wm.distributeEvent(stop, e)
+		case <-stop:
+			return
 		}
 	}
 }
 
-func (r *recordKeeper) ReplaceRegistrarRoster(reg *Registrar, roster map[schema.GroupVersionKind]watchVitals) {
-	r.intentMux.Lock()
-	defer r.intentMux.Unlock()
-	r.intent[reg.parentName] = roster
-}
+// distributeEvent distributes a single event to all registrars listening for that resource kind.
+func (wm *Manager) distributeEvent(stop <-chan struct{}, obj interface{}) {
+	o, ok := obj.(client.Object)
+	if !ok || o == nil {
+		// Invalid object, drop it
+		return
+	}
+	gvk := o.GetObjectKind().GroupVersionKind()
+	e := event.GenericEvent{
+		Object: o,
+	}
 
-func (r *recordKeeper) Remove(rm map[string][]schema.GroupVersionKind) {
-	r.intentMux.Lock()
-	defer r.intentMux.Unlock()
-	for k, lst := range rm {
-		for _, k2 := range lst {
-			delete(r.intent[k], k2)
+	// Critical lock section
+	var watchers []chan<- event.GenericEvent
+	func() {
+		wm.watchedMux.RLock()
+		defer wm.watchedMux.RUnlock()
+
+		r, ok := wm.watchedKinds[gvk]
+		if !ok {
+			// Nobody is watching, drop it
+			return
+		}
+
+		// TODO(OREN) reduce allocations here
+		watchers = make([]chan<- event.GenericEvent, 0, len(r.registrars))
+		for w := range r.registrars {
+			if w.events == nil {
+				continue
+			}
+			watchers = append(watchers, w.events)
+		}
+	}()
+
+	// Distribute the event
+	for _, w := range watchers {
+		select {
+		case w <- e:
+		// TODO(OREN) add timeout
+		case <-stop:
 		}
 	}
-}
-
-func (r *recordKeeper) Get() map[string]map[schema.GroupVersionKind]watchVitals {
-	r.intentMux.RLock()
-	defer r.intentMux.RUnlock()
-	cpy := make(map[string]map[schema.GroupVersionKind]watchVitals)
-	for k := range r.intent {
-		cpy[k] = make(map[schema.GroupVersionKind]watchVitals)
-		for k2, v := range r.intent[k] {
-			cpy[k][k2] = v
-		}
-	}
-	return cpy
-}
-
-func newRecordKeeper() *recordKeeper {
-	return &recordKeeper{
-		intent:     make(map[string]map[schema.GroupVersionKind]watchVitals),
-		registrars: make(map[string]*Registrar),
-	}
-}
-
-// A Registrar allows a parent to add/remove child watches
-type Registrar struct {
-	parentName string
-	addFns     []func(manager.Manager, schema.GroupVersionKind) error
-	mgr        *WatchManager
-}
-
-// AddWatch registers a watch for the given kind
-func (r *Registrar) AddWatch(gvk schema.GroupVersionKind) error {
-	return r.mgr.addWatch(gvk, r)
-}
-
-func (r *Registrar) ReplaceWatch(gvks []schema.GroupVersionKind) error {
-	return r.mgr.replaceWatchSet(gvks, r)
-}
-
-func (r *Registrar) RemoveWatch(gvk schema.GroupVersionKind) error {
-	return r.mgr.removeWatch(gvk, r)
-}
-
-func (r *Registrar) Pause() error {
-	return r.mgr.Pause()
-}
-
-func (r *Registrar) Unpause() error {
-	return r.mgr.Unpause()
 }

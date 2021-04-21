@@ -42,10 +42,10 @@ func (env *TypeEnv) Get(x interface{}) types.Type {
 		return types.NewString()
 
 	// Composites.
-	case Array:
-		static := make([]types.Type, len(x))
+	case *Array:
+		static := make([]types.Type, x.Len())
 		for i := range static {
-			tpe := env.Get(x[i].Value)
+			tpe := env.Get(x.Elem(i).Value)
 			static[i] = tpe
 		}
 
@@ -56,23 +56,23 @@ func (env *TypeEnv) Get(x interface{}) types.Type {
 
 		return types.NewArray(static, dynamic)
 
-	case Object:
+	case *object:
 		static := []*types.StaticProperty{}
 		var dynamic *types.DynamicProperty
 
 		x.Foreach(func(k, v *Term) {
 			if IsConstant(k.Value) {
 				kjson, err := JSON(k.Value)
-				if err != nil {
-					panic("unreachable")
+				if err == nil {
+					tpe := env.Get(v)
+					static = append(static, types.NewStaticProperty(kjson, tpe))
+					return
 				}
-				tpe := env.Get(v)
-				static = append(static, types.NewStaticProperty(kjson, tpe))
-			} else {
-				typeK := env.Get(k.Value)
-				typeV := env.Get(v.Value)
-				dynamic = types.NewDynamicProperty(typeK, typeV)
 			}
+			// Can't handle it as a static property, fallback to dynamic
+			typeK := env.Get(k.Value)
+			typeV := env.Get(v.Value)
+			dynamic = types.NewDynamicProperty(typeK, typeV)
 		})
 
 		if len(static) == 0 && dynamic == nil {
@@ -127,6 +127,10 @@ func (env *TypeEnv) Get(x interface{}) types.Type {
 		if env.next != nil {
 			return env.next.Get(x)
 		}
+		return nil
+
+	// Calls.
+	case Call:
 		return nil
 
 	default:
@@ -315,7 +319,7 @@ func selectRef(tpe types.Type, ref Ref) types.Type {
 	head, tail := ref[0], ref[1:]
 
 	switch head.Value.(type) {
-	case Var, Ref, Array, Object, Set:
+	case Var, Ref, *Array, Object, Set:
 		return selectRef(types.Values(tpe), tail)
 	default:
 		return selectRef(selectConstant(tpe, head), tail)

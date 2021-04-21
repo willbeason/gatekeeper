@@ -2,7 +2,12 @@ package topdown
 
 import (
 	"context"
+	"crypto/rand"
+	"io"
 	"sort"
+	"time"
+
+	"github.com/open-policy-agent/opa/topdown/cache"
 
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/metrics"
@@ -20,19 +25,35 @@ type QueryResult map[ast.Var]*ast.Term
 
 // Query provides a configurable interface for performing query evaluation.
 type Query struct {
-	cancel           Cancel
-	query            ast.Body
-	compiler         *ast.Compiler
-	store            storage.Store
-	txn              storage.Transaction
-	input            *ast.Term
-	tracers          []Tracer
-	unknowns         []*ast.Term
-	partialNamespace string
-	metrics          metrics.Metrics
-	instr            *Instrumentation
-	genvarprefix     string
-	runtime          *ast.Term
+	seed                   io.Reader
+	time                   time.Time
+	cancel                 Cancel
+	query                  ast.Body
+	queryCompiler          ast.QueryCompiler
+	compiler               *ast.Compiler
+	store                  storage.Store
+	txn                    storage.Transaction
+	input                  *ast.Term
+	tracers                []QueryTracer
+	plugTraceVars          bool
+	unknowns               []*ast.Term
+	partialNamespace       string
+	skipSaveNamespace      bool
+	metrics                metrics.Metrics
+	instr                  *Instrumentation
+	disableInlining        []ast.Ref
+	shallowInlining        bool
+	genvarprefix           string
+	runtime                *ast.Term
+	builtins               map[string]*Builtin
+	indexing               bool
+	interQueryBuiltinCache cache.InterQueryCache
+}
+
+// Builtin represents a built-in function that queries can call.
+type Builtin struct {
+	Decl *ast.Builtin
+	Func BuiltinFunc
 }
 
 // NewQuery returns a new Query object that can be run.
@@ -40,7 +61,14 @@ func NewQuery(query ast.Body) *Query {
 	return &Query{
 		query:        query,
 		genvarprefix: ast.WildcardPrefix,
+		indexing:     true,
 	}
+}
+
+// WithQueryCompiler sets the queryCompiler used for the query.
+func (q *Query) WithQueryCompiler(queryCompiler ast.QueryCompiler) *Query {
+	q.queryCompiler = queryCompiler
+	return q
 }
 
 // WithCompiler sets the compiler to use for the query.
@@ -77,8 +105,31 @@ func (q *Query) WithInput(input *ast.Term) *Query {
 }
 
 // WithTracer adds a query tracer to use during evaluation. This is optional.
+// Deprecated: Use WithQueryTracer instead.
 func (q *Query) WithTracer(tracer Tracer) *Query {
+	qt, ok := tracer.(QueryTracer)
+	if !ok {
+		qt = WrapLegacyTracer(tracer)
+	}
+	return q.WithQueryTracer(qt)
+}
+
+// WithQueryTracer adds a query tracer to use during evaluation. This is optional.
+// Disabled QueryTracers will be ignored.
+func (q *Query) WithQueryTracer(tracer QueryTracer) *Query {
+	if !tracer.Enabled() {
+		return q
+	}
+
 	q.tracers = append(q.tracers, tracer)
+
+	// If *any* of the tracers require local variable metadata we need to
+	// enabled plugging local trace variables.
+	conf := tracer.Config()
+	if conf.PlugLocalVars {
+		q.plugTraceVars = true
+	}
+
 	return q
 }
 
@@ -111,10 +162,67 @@ func (q *Query) WithPartialNamespace(ns string) *Query {
 	return q
 }
 
+// WithSkipPartialNamespace disables namespacing of saved support rules that are generated
+// from the original policy (rules which are completely syntethic are still namespaced.)
+func (q *Query) WithSkipPartialNamespace(yes bool) *Query {
+	q.skipSaveNamespace = yes
+	return q
+}
+
+// WithDisableInlining adds a set of paths to the query that should be excluded from
+// inlining. Inlining during partial evaluation can be expensive in some cases
+// (e.g., when a cross-product is computed.) Disabling inlining avoids expensive
+// computation at the cost of generating support rules.
+func (q *Query) WithDisableInlining(paths []ast.Ref) *Query {
+	q.disableInlining = paths
+	return q
+}
+
+// WithShallowInlining disables aggressive inlining performed during partial evaluation.
+// When shallow inlining is enabled rules that depend (transitively) on unknowns are not inlined.
+// Only rules/values that are completely known will be inlined.
+func (q *Query) WithShallowInlining(yes bool) *Query {
+	q.shallowInlining = yes
+	return q
+}
+
 // WithRuntime sets the runtime data to execute the query with. The runtime data
 // can be returned by the `opa.runtime` built-in function.
 func (q *Query) WithRuntime(runtime *ast.Term) *Query {
 	q.runtime = runtime
+	return q
+}
+
+// WithBuiltins adds a set of built-in functions that can be called by the
+// query.
+func (q *Query) WithBuiltins(builtins map[string]*Builtin) *Query {
+	q.builtins = builtins
+	return q
+}
+
+// WithIndexing will enable or disable using rule indexing for the evaluation
+// of the query. The default is enabled.
+func (q *Query) WithIndexing(enabled bool) *Query {
+	q.indexing = enabled
+	return q
+}
+
+// WithSeed sets a reader that will seed randomization required by built-in functions.
+// If a seed is not provided crypto/rand.Reader is used.
+func (q *Query) WithSeed(r io.Reader) *Query {
+	q.seed = r
+	return q
+}
+
+// WithTime sets the time that will be returned by the time.now_ns() built-in function.
+func (q *Query) WithTime(x time.Time) *Query {
+	q.time = x
+	return q
+}
+
+// WithInterQueryBuiltinCache sets the inter-query cache that built-in functions can utilize.
+func (q *Query) WithInterQueryBuiltinCache(c cache.InterQueryCache) *Query {
+	q.interQueryBuiltinCache = c
 	return q
 }
 
@@ -129,34 +237,63 @@ func (q *Query) PartialRun(ctx context.Context) (partials []ast.Body, support []
 	if q.partialNamespace == "" {
 		q.partialNamespace = "partial" // lazily initialize partial namespace
 	}
+	if q.seed == nil {
+		q.seed = rand.Reader
+	}
+	if !q.time.IsZero() {
+		q.time = time.Now()
+	}
+	if q.metrics == nil {
+		q.metrics = metrics.New()
+	}
 	f := &queryIDFactory{}
 	b := newBindings(0, q.instr)
 	e := &eval{
-		ctx:           ctx,
-		cancel:        q.cancel,
-		query:         q.query,
-		queryIDFact:   f,
-		queryID:       f.Next(),
-		bindings:      b,
-		compiler:      q.compiler,
-		store:         q.store,
-		baseCache:     newBaseCache(),
-		withCache:     newBaseCache(),
-		txn:           q.txn,
-		input:         q.input,
-		tracers:       q.tracers,
-		instr:         q.instr,
-		builtinCache:  builtins.Cache{},
-		virtualCache:  newVirtualCache(),
-		saveSet:       newSaveSet(q.unknowns, b),
-		saveStack:     newSaveStack(),
-		saveSupport:   newSaveSupport(),
-		saveNamespace: ast.StringTerm(q.partialNamespace),
-		genvarprefix:  q.genvarprefix,
-		runtime:       q.runtime,
+		ctx:                    ctx,
+		metrics:                q.metrics,
+		seed:                   q.seed,
+		time:                   ast.NumberTerm(int64ToJSONNumber(q.time.UnixNano())),
+		cancel:                 q.cancel,
+		query:                  q.query,
+		queryCompiler:          q.queryCompiler,
+		queryIDFact:            f,
+		queryID:                f.Next(),
+		bindings:               b,
+		compiler:               q.compiler,
+		store:                  q.store,
+		baseCache:              newBaseCache(),
+		targetStack:            newRefStack(),
+		txn:                    q.txn,
+		input:                  q.input,
+		tracers:                q.tracers,
+		traceEnabled:           len(q.tracers) > 0,
+		plugTraceVars:          q.plugTraceVars,
+		instr:                  q.instr,
+		builtins:               q.builtins,
+		builtinCache:           builtins.Cache{},
+		interQueryBuiltinCache: q.interQueryBuiltinCache,
+		virtualCache:           newVirtualCache(),
+		comprehensionCache:     newComprehensionCache(),
+		saveSet:                newSaveSet(q.unknowns, b, q.instr),
+		saveStack:              newSaveStack(),
+		saveSupport:            newSaveSupport(),
+		saveNamespace:          ast.StringTerm(q.partialNamespace),
+		skipSaveNamespace:      q.skipSaveNamespace,
+		inliningControl: &inliningControl{
+			shallow: q.shallowInlining,
+		},
+		genvarprefix: q.genvarprefix,
+		runtime:      q.runtime,
+		indexing:     q.indexing,
 	}
-	q.startTimer(metrics.RegoPartialEval)
-	defer q.stopTimer(metrics.RegoPartialEval)
+
+	if len(q.disableInlining) > 0 {
+		e.inliningControl.PushDisable(q.disableInlining, false)
+	}
+
+	e.caller = e
+	q.metrics.Timer(metrics.RegoPartialEval).Start()
+	defer q.metrics.Timer(metrics.RegoPartialEval).Stop()
 
 	livevars := ast.NewVarSet()
 
@@ -167,9 +304,10 @@ func (q *Query) PartialRun(ctx context.Context) (partials []ast.Body, support []
 		return false
 	})
 
-	p := copypropagation.New(livevars)
+	p := copypropagation.New(livevars).WithCompiler(q.compiler)
 
 	err = e.Run(func(e *eval) error {
+
 		// Build output from saved expressions.
 		body := ast.NewBody()
 
@@ -194,7 +332,10 @@ func (q *Query) PartialRun(ctx context.Context) (partials []ast.Body, support []
 			body.Append(bindingExprs[i])
 		}
 
-		body = p.Apply(body)
+		if !q.shallowInlining {
+			body = applyCopyPropagation(p, e.instr, body)
+		}
+
 		partials = append(partials, body)
 		return nil
 	})
@@ -217,30 +358,49 @@ func (q *Query) Run(ctx context.Context) (QueryResultSet, error) {
 // Iter executes the query and invokes the iter function with query results
 // produced by evaluating the query.
 func (q *Query) Iter(ctx context.Context, iter func(QueryResult) error) error {
+	if q.seed == nil {
+		q.seed = rand.Reader
+	}
+	if q.time.IsZero() {
+		q.time = time.Now()
+	}
+	if q.metrics == nil {
+		q.metrics = metrics.New()
+	}
 	f := &queryIDFactory{}
 	e := &eval{
-		ctx:          ctx,
-		cancel:       q.cancel,
-		query:        q.query,
-		queryIDFact:  f,
-		queryID:      f.Next(),
-		bindings:     newBindings(0, q.instr),
-		compiler:     q.compiler,
-		store:        q.store,
-		baseCache:    newBaseCache(),
-		withCache:    newBaseCache(),
-		txn:          q.txn,
-		input:        q.input,
-		tracers:      q.tracers,
-		instr:        q.instr,
-		builtinCache: builtins.Cache{},
-		virtualCache: newVirtualCache(),
-		genvarprefix: q.genvarprefix,
-		runtime:      q.runtime,
+		ctx:                    ctx,
+		metrics:                q.metrics,
+		seed:                   q.seed,
+		time:                   ast.NumberTerm(int64ToJSONNumber(q.time.UnixNano())),
+		cancel:                 q.cancel,
+		query:                  q.query,
+		queryCompiler:          q.queryCompiler,
+		queryIDFact:            f,
+		queryID:                f.Next(),
+		bindings:               newBindings(0, q.instr),
+		compiler:               q.compiler,
+		store:                  q.store,
+		baseCache:              newBaseCache(),
+		targetStack:            newRefStack(),
+		txn:                    q.txn,
+		input:                  q.input,
+		tracers:                q.tracers,
+		traceEnabled:           len(q.tracers) > 0,
+		plugTraceVars:          q.plugTraceVars,
+		instr:                  q.instr,
+		builtins:               q.builtins,
+		builtinCache:           builtins.Cache{},
+		interQueryBuiltinCache: q.interQueryBuiltinCache,
+		virtualCache:           newVirtualCache(),
+		comprehensionCache:     newComprehensionCache(),
+		genvarprefix:           q.genvarprefix,
+		runtime:                q.runtime,
+		indexing:               q.indexing,
 	}
-	q.startTimer(metrics.RegoQueryEval)
-	defer q.stopTimer(metrics.RegoQueryEval)
-	return e.Run(func(e *eval) error {
+	e.caller = e
+	q.metrics.Timer(metrics.RegoQueryEval).Start()
+	err := e.Run(func(e *eval) error {
 		qr := QueryResult{}
 		e.bindings.Iter(nil, func(k, v *ast.Term) error {
 			qr[k.Value.(ast.Var)] = v
@@ -248,16 +408,6 @@ func (q *Query) Iter(ctx context.Context, iter func(QueryResult) error) error {
 		})
 		return iter(qr)
 	})
-}
-
-func (q *Query) startTimer(name string) {
-	if q.metrics != nil {
-		q.metrics.Timer(name).Start()
-	}
-}
-
-func (q *Query) stopTimer(name string) {
-	if q.metrics != nil {
-		q.metrics.Timer(name).Stop()
-	}
+	q.metrics.Timer(metrics.RegoQueryEval).Stop()
+	return err
 }

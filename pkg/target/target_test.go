@@ -36,22 +36,22 @@ func TestValidateConstraint(t *testing.T) {
 			Name: "No LabelSelector",
 			Constraint: `
 {
-	"apiVersion": "constraints.gatekeeper.sh/v1alpha1",
+	"apiVersion": "constraints.gatekeeper.sh/v1beta1",
 	"kind": "K8sRequiredLabel",
 	"metadata": {
-  	"name": "ns-must-have-gk"
+		"name": "ns-must-have-gk"
 	},
 	"spec": {
-  	"match": {
-    	"kinds": [
-      	{
+		"match": {
+			"kinds": [
+				{
 					"apiGroups": [""],
-        	"kinds": ["Namespace"]
+					"kinds": ["Namespace"]
 				}
 			]
 		},
-  	"parameters": {
-    	"labels": ["gatekeeper"]
+		"parameters": {
+			"labels": ["gatekeeper"]
 		}
 	}
 }
@@ -62,17 +62,17 @@ func TestValidateConstraint(t *testing.T) {
 			Name: "Valid LabelSelector",
 			Constraint: `
 {
-	"apiVersion": "constraints.gatekeeper.sh/v1alpha1",
+	"apiVersion": "constraints.gatekeeper.sh/v1beta1",
 	"kind": "K8sRequiredLabel",
 	"metadata": {
-  	"name": "ns-must-have-gk"
+		"name": "ns-must-have-gk"
 	},
 	"spec": {
-  	"match": {
-    	"kinds": [
-      	{
+		"match": {
+			"kinds": [
+				{
 					"apiGroups": [""],
-        	"kinds": ["Namespace"]
+					"kinds": ["Namespace"]
 				}
 			],
 			"labelSelector": {
@@ -83,8 +83,8 @@ func TestValidateConstraint(t *testing.T) {
 				}]
 			}
 		},
-  	"parameters": {
-    	"labels": ["gatekeeper"]
+		"parameters": {
+			"labels": ["gatekeeper"]
 		}
 	}
 }
@@ -95,17 +95,17 @@ func TestValidateConstraint(t *testing.T) {
 			Name: "Invalid LabelSelector",
 			Constraint: `
 {
-	"apiVersion": "constraints.gatekeeper.sh/v1alpha1",
+	"apiVersion": "constraints.gatekeeper.sh/v1beta1",
 	"kind": "K8sRequiredLabel",
 	"metadata": {
-  	"name": "ns-must-have-gk"
+		"name": "ns-must-have-gk"
 	},
 	"spec": {
-  	"match": {
-    	"kinds": [
-      	{
+		"match": {
+			"kinds": [
+				{
 					"apiGroups": [""],
-        	"kinds": ["Namespace"]
+					"kinds": ["Namespace"]
 				}
 			],
 			"labelSelector": {
@@ -116,8 +116,8 @@ func TestValidateConstraint(t *testing.T) {
 				}]
 			}
 		},
-  	"parameters": {
-    	"labels": ["gatekeeper"]
+		"parameters": {
+			"labels": ["gatekeeper"]
 		}
 	}
 }
@@ -128,28 +128,29 @@ func TestValidateConstraint(t *testing.T) {
 			Name: "No NamespaceSelector",
 			Constraint: `
 {
-	"apiVersion": "constraints.gatekeeper.sh/v1alpha1",
+	"apiVersion": "constraints.gatekeeper.sh/v1beta1",
 	"kind": "K8sAllowedRepos",
 	"metadata": {
-  	"name": "prod-nslabels-is-openpolicyagent"
+		"name": "prod-nslabels-is-openpolicyagent"
 	},
 	"spec": {
-  	"match": {
-    	"kinds": [
-      	{
-			"apiGroups": [""],
-        	"kinds": ["Pod"]
-		}],
-		"labelSelector": {
-			"matchExpressions": [{
-	     		"key": "someKey",
-				"operator": "In",
-				"values": ["some value"]
-			}]
-		}
-	},
-  	"parameters": {
-    	"repos": ["openpolicyagent"]
+		"match": {
+			"kinds": [
+				{
+					"apiGroups": [""],
+					"kinds": ["Pod"]
+				}
+			],
+			"labelSelector": {
+				"matchExpressions": [{
+					"key": "someKey",
+					"operator": "In",
+					"values": ["some value"]
+				}]
+			}
+		},
+		"parameters": {
+			"repos": ["openpolicyagent"]
 		}
 	}
 }
@@ -160,28 +161,29 @@ func TestValidateConstraint(t *testing.T) {
 			Name: "Valid NamespaceSelector",
 			Constraint: `
 {
-	"apiVersion": "constraints.gatekeeper.sh/v1alpha1",
+	"apiVersion": "constraints.gatekeeper.sh/v1beta1",
 	"kind": "K8sAllowedRepos",
 	"metadata": {
-  	"name": "prod-nslabels-is-openpolicyagent"
+		"name": "prod-nslabels-is-openpolicyagent"
 	},
 	"spec": {
-  	"match": {
-    	"kinds": [
-      	{
-			"apiGroups": [""],
-        	"kinds": ["Pod"]
-		}],
-		"namespaceSelector": {
-			"matchExpressions": [{
-	     		"key": "someKey",
-				"operator": "In",
-				"values": ["some value"]
-			}]
-		}
-	},
-  	"parameters": {
-    	"repos": ["openpolicyagent"]
+		"match": {
+			"kinds": [
+				{
+					"apiGroups": [""],
+					"kinds": ["Pod"]
+				}
+			],
+			"namespaceSelector": {
+				"matchExpressions": [{
+					"key": "someKey",
+					"operator": "In",
+					"values": ["some value"]
+				}]
+			}
+		},
+		"parameters": {
+			"repos": ["openpolicyagent"]
 		}
 	}
 }
@@ -192,33 +194,61 @@ func TestValidateConstraint(t *testing.T) {
 			Name: "Invalid NamespaceSelector",
 			Constraint: `
 {
-	"apiVersion": "constraints.gatekeeper.sh/v1alpha1",
+	"apiVersion": "constraints.gatekeeper.sh/v1beta1",
 	"kind": "K8sAllowedRepos",
 	"metadata": {
-  	"name": "prod-nslabels-is-openpolicyagent"
+		"name": "prod-nslabels-is-openpolicyagent"
 	},
 	"spec": {
-  	"match": {
-    	"kinds": [
-      	{
-			"apiGroups": [""],
-        	"kinds": ["Pod"]
-		}],
-		"namespaceSelector": {
-			"matchExpressions": [{
-	     		"key": "someKey",
-				"operator": "Blah",
-				"values": ["some value"]
-			}]
-		}
-	},
-  	"parameters": {
-    	"repos": ["openpolicyagent"]
+		"match": {
+			"kinds": [
+				{
+					"apiGroups": [""],
+					"kinds": ["Pod"]
+				}
+			],
+			"namespaceSelector": {
+				"matchExpressions": [{
+					"key": "someKey",
+					"operator": "Blah",
+					"values": ["some value"]
+				}]
+			}
+		},
+		"parameters": {
+			"repos": ["openpolicyagent"]
 		}
 	}
 }
 `,
 			ErrorExpected: true,
+		},
+		{
+			Name: "Valid EnforcementAction",
+			Constraint: `
+{
+	"apiVersion": "constraints.gatekeeper.sh/v1beta1",
+	"kind": "K8sAllowedRepos",
+	"metadata": {
+		"name": "prod-nslabels-is-openpolicyagent"
+	},
+	"spec": {
+		"enforcementAction": "dryrun",
+		"match": {
+			"kinds": [
+				{
+					"apiGroups": [""],
+					"kinds": ["Pod"]
+				}
+			]
+		},
+		"parameters": {
+			"repos": ["openpolicyagent"]
+		}
+	}
+}
+`,
+			ErrorExpected: false,
 		},
 	}
 	for _, tt := range tc {
@@ -258,7 +288,7 @@ func TestHandleViolation(t *testing.T) {
 	},
 	"name": "somename",
 	"operation": "CREATE",
-  "object": {
+	"object": {
 		"metadata": {"name": "somename"},
 		"spec": {"value": "yep"}
 	}
@@ -284,7 +314,7 @@ func TestHandleViolation(t *testing.T) {
 	},
 	"name": "somename",
 	"operation": "CREATE",
-  "object": {
+	"object": {
 		"metadata": {"name": "somename"},
 		"spec": {"value": "yep"}
 	}
@@ -345,18 +375,18 @@ func TestProcessData(t *testing.T) {
 	}{
 		{
 			Name:         "Cluster Object",
-			JSON:         `{"apiVersion": "v1alpha1", "kind": "Rock", "metadata": {"name": "myrock"}}`,
-			ExpectedPath: "cluster/v1alpha1/Rock/myrock",
+			JSON:         `{"apiVersion": "v1beta1", "kind": "Rock", "metadata": {"name": "myrock"}}`,
+			ExpectedPath: "cluster/v1beta1/Rock/myrock",
 		},
 		{
 			Name:         "Namespace Object",
-			JSON:         `{"apiVersion": "v1alpha1", "kind": "Rock", "metadata": {"name": "myrock", "namespace": "foo"}}`,
-			ExpectedPath: "namespace/foo/v1alpha1/Rock/myrock",
+			JSON:         `{"apiVersion": "v1beta1", "kind": "Rock", "metadata": {"name": "myrock", "namespace": "foo"}}`,
+			ExpectedPath: "namespace/foo/v1beta1/Rock/myrock",
 		},
 		{
 			Name:         "Grouped Object",
-			JSON:         `{"apiVersion": "mygroup/v1alpha1", "kind": "Rock", "metadata": {"name": "myrock"}}`,
-			ExpectedPath: "cluster/mygroup%2Fv1alpha1/Rock/myrock",
+			JSON:         `{"apiVersion": "mygroup/v1beta1", "kind": "Rock", "metadata": {"name": "myrock"}}`,
+			ExpectedPath: "cluster/mygroup%2Fv1beta1/Rock/myrock",
 		},
 		{
 			Name:          "No Version",

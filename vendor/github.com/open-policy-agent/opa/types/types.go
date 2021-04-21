@@ -182,11 +182,13 @@ func (t *Array) Len() int {
 
 // Select returns the type of element at the zero-based pos.
 func (t *Array) Select(pos int) Type {
-	if len(t.static) > pos {
-		return t.static[pos]
-	}
-	if t.dynamic != nil {
-		return t.dynamic
+	if pos >= 0 {
+		if len(t.static) > pos {
+			return t.static[pos]
+		}
+		if t.dynamic != nil {
+			return t.dynamic
+		}
 	}
 	return nil
 }
@@ -377,10 +379,13 @@ func (t Any) Contains(other Type) bool {
 
 // MarshalJSON returns the JSON encoding of t.
 func (t Any) MarshalJSON() ([]byte, error) {
-	return json.Marshal(map[string]interface{}{
+	data := map[string]interface{}{
 		"type": t.typeMarker(),
-		"of":   []Type(t),
-	})
+	}
+	if len(t) != 0 {
+		data["of"] = []Type(t)
+	}
+	return json.Marshal(data)
 }
 
 // Merge return a new Any type that is the superset of t and other.
@@ -484,6 +489,23 @@ func (t *Function) MarshalJSON() ([]byte, error) {
 		repr["result"] = t.result
 	}
 	return json.Marshal(repr)
+}
+
+// UnmarshalJSON decodes the JSON serialized function declaration.
+func (t *Function) UnmarshalJSON(bs []byte) error {
+
+	tpe, err := Unmarshal(bs)
+	if err != nil {
+		return err
+	}
+
+	f, ok := tpe.(*Function)
+	if !ok {
+		return fmt.Errorf("invalid type")
+	}
+
+	*t = *f
+	return nil
 }
 
 // Union returns a new function represnting the union of t and other. Functions
@@ -800,6 +822,15 @@ func TypeOf(x interface{}) Type {
 		return S
 	case json.Number:
 		return N
+	case map[string]interface{}:
+		// The ast.ValueToInterface() function returns ast.Object values as map[string]interface{}
+		// so map[string]interface{} must be handled here because the type checker uses the value
+		// to interface conversion when inferring object types.
+		static := make([]*StaticProperty, 0, len(x))
+		for k, v := range x {
+			static = append(static, NewStaticProperty(k, TypeOf(v)))
+		}
+		return NewObject(static, nil)
 	case map[interface{}]interface{}:
 		static := make([]*StaticProperty, 0, len(x))
 		for k, v := range x {

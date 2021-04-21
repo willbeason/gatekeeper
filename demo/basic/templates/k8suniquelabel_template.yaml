@@ -1,4 +1,4 @@
-apiVersion: templates.gatekeeper.sh/v1alpha1
+apiVersion: templates.gatekeeper.sh/v1beta1
 kind: ConstraintTemplate
 metadata:
   name: k8suniquelabel
@@ -7,9 +7,6 @@ spec:
     spec:
       names:
         kind: K8sUniqueLabel
-        listKind: K8sUniqueLabelList
-        plural: k8suniquelabel
-        singular: k8suniquelabel
       validation:
         # Schema for the `parameters` field
         openAPIV3Schema:
@@ -47,7 +44,7 @@ spec:
         }
 
         violation[{"msg": msg, "details": {"value": val, "label": label}}] {
-          label := input.constraint.spec.parameters.label
+          label := input.parameters.label
           val := input.review.object.metadata.labels[label]
           cluster_objs := [o | o = data.inventory.cluster[_][_][_]; not identical_cluster(o, input.review)]
           ns_objs := [o | o = data.inventory.namespace[_][_][_][_]; not identical_namespace(o, input.review)]
