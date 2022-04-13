@@ -1,8 +1,8 @@
 # Image URL to use all building/pushing image targets
-REPOSITORY ?= openpolicyagent/gatekeeper
-CRD_REPOSITORY ?= openpolicyagent/gatekeeper-crds
-IMG := $(REPOSITORY):latest
-CRD_IMG := $(CRD_REPOSITORY):latest
+REPOSITORY ?= gcr.io/willbeason-acm-test/willbeason/gatekeeper
+CRD_REPOSITORY ?= gcr.io/willbeason-acm-test/willbeason/gatekeeper-crds
+IMG := $(REPOSITORY):golang
+CRD_IMG := $(CRD_REPOSITORY):golang
 # DEV_TAG will be replaced with short Git SHA on pre-release stage in CI
 DEV_TAG ?= dev
 USE_LOCAL_IMG ?= false

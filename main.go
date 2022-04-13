@@ -38,6 +38,7 @@ import (
 	"github.com/open-policy-agent/gatekeeper/pkg/controller"
 	"github.com/open-policy-agent/gatekeeper/pkg/controller/config/process"
 	"github.com/open-policy-agent/gatekeeper/pkg/externaldata"
+	"github.com/open-policy-agent/gatekeeper/pkg/gator/golangdriver"
 	"github.com/open-policy-agent/gatekeeper/pkg/metrics"
 	"github.com/open-policy-agent/gatekeeper/pkg/mutation"
 	"github.com/open-policy-agent/gatekeeper/pkg/operations"
@@ -266,11 +267,11 @@ func setupControllers(mgr ctrl.Manager, sw *watch.ControllerSwitch, tracker *rea
 		mutationOpts.ProviderCache = providerCache
 	}
 	// initialize OPA
-	driver, err := local.New(args...)
-	if err != nil {
-		setupLog.Error(err, "unable to set up Driver")
-		os.Exit(1)
-	}
+	driver := golangdriver.NewDriver()
+	//if err != nil {
+	//	setupLog.Error(err, "unable to set up Driver")
+	//	os.Exit(1)
+	//}
 
 	client, err := constraintclient.NewClient(constraintclient.Targets(&target.K8sValidationTarget{}), constraintclient.Driver(driver))
 	if err != nil {
