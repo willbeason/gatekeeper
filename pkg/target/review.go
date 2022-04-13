@@ -10,7 +10,7 @@ type AugmentedReview struct {
 	Namespace        *corev1.Namespace
 }
 
-type gkReview struct {
+type GkReview struct {
 	admissionv1.AdmissionRequest
 	Unstable unstable `json:"_unstable,omitempty"`
 }

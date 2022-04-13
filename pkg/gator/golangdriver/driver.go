@@ -8,6 +8,7 @@ import (
 	"github.com/open-policy-agent/frameworks/constraint/pkg/client/drivers"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/core/templates"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/types"
+	target2 "github.com/open-policy-agent/gatekeeper/pkg/target"
 	"github.com/open-policy-agent/opa/storage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -86,9 +87,13 @@ func (d *Driver) RemoveData(ctx context.Context, target string, path storage.Pat
 }
 
 func (d *Driver) Query(ctx context.Context, target string, constraints []*unstructured.Unstructured, review interface{}, opts ...drivers.QueryOpt) ([]*types.Result, *string, error) {
+	gkr := review.(*target2.GkReview)
+
 	obj := &unstructured.Unstructured{
-		Object: review.(map[string]interface{}),
+		Object: make(map[string]interface{}),
 	}
+
+	obj.UnmarshalJSON(gkr.Object.Raw)
 
 	var results []*types.Result
 	for _, constraint := range constraints {
