@@ -35,6 +35,7 @@ func UniqueIngressHost(_ interface{}) Constraint {
 				}
 			}
 		}
+
 		return nil
 	}
 }
