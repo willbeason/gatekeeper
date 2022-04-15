@@ -34,8 +34,23 @@ func (d *Driver) AddTemplate(ctx context.Context, ct *templates.ConstraintTempla
 	kind := ct.Spec.CRD.Spec.Names.Kind
 	entry := ct.Annotations[Annotation]
 
-	d.templates[kind] = library[entry]
-	if _, found := d.constraints[kind]; !found {
+	templateFn, found := library[entry]
+	if !found {
+		templateFn = func(params interface{}) ConstraintFn {
+			return func(storage map[string]*unstructured.Unstructured, review *unstructured.Unstructured) *types.Result {
+				return nil
+			}
+		}
+	}
+	d.templates[kind] = templateFn
+
+	if constraints, found := d.constraints[kind]; found {
+		for name, constraint := range constraints {
+			constraint.fn = templateFn(constraint)
+			constraints[name] = constraint
+		}
+		d.constraints[kind] = constraints
+	} else {
 		d.constraints[kind] = make(map[string]Constraint)
 	}
 
@@ -53,9 +68,23 @@ func (d *Driver) RemoveTemplate(ctx context.Context, ct *templates.ConstraintTem
 
 func (d *Driver) AddConstraint(ctx context.Context, constraint *unstructured.Unstructured) error {
 	kind := constraint.GetKind()
-	c := d.templates[kind](constraint)
 
-	d.constraints[kind][constraint.GetName()] = c
+	template, found := d.templates[kind]
+	if !found {
+		return nil
+	}
+
+	c := template(constraint)
+
+	kindConstraints, found := d.constraints[kind]
+	if !found {
+		return nil
+	}
+
+	kindConstraints[constraint.GetName()] = Constraint{
+		constraint: constraint,
+		fn:         c,
+	}
 
 	return nil
 }
@@ -93,16 +122,26 @@ func (d *Driver) Query(ctx context.Context, target string, constraints []*unstru
 		Object: make(map[string]interface{}),
 	}
 
-	obj.UnmarshalJSON(gkr.Object.Raw)
+	err := obj.UnmarshalJSON(gkr.Object.Raw)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	var results []*types.Result
 	for _, constraint := range constraints {
 		kind := constraint.GetKind()
-		kindConstraints := d.constraints[kind]
-		name := constraint.GetName()
-		toRun := kindConstraints[name]
+		kindConstraints, found := d.constraints[kind]
+		if !found {
+			continue
+		}
 
-		result := toRun(d.storage, obj)
+		name := constraint.GetName()
+		toRun, found := kindConstraints[name]
+		if !found {
+			continue
+		}
+
+		result := toRun.fn(d.storage, obj)
 		if result != nil {
 			result.Constraint = constraint.DeepCopy()
 			result.EnforcementAction = constraints2.EnforcementActionDeny

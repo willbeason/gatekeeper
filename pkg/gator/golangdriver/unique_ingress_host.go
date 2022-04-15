@@ -9,7 +9,7 @@ import (
 
 const UniqueIngressHostKey = "unique-ingress-host"
 
-func UniqueIngressHost(_ interface{}) Constraint {
+func UniqueIngressHost(_ interface{}) ConstraintFn {
 	return func(storage map[string]*unstructured.Unstructured, review *unstructured.Unstructured) *types.Result {
 		hosts := getHosts(review.Object)
 
@@ -30,7 +30,7 @@ func UniqueIngressHost(_ interface{}) Constraint {
 				if hosts[h] {
 					conflict := h
 					return &types.Result{
-						Msg: fmt.Sprintf("ingress host conflicts with an existing ingress: %q", conflict),
+						Msg: fmt.Sprintf("ingress host conflicts with an existing ingress (go): %q", conflict),
 					}
 				}
 			}

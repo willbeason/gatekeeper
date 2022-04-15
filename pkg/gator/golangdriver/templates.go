@@ -5,9 +5,14 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-type Template func(params interface{}) Constraint
+type Template func(params interface{}) ConstraintFn
 
-type Constraint func(storage map[string]*unstructured.Unstructured, review *unstructured.Unstructured) *types.Result
+type Constraint struct {
+	constraint *unstructured.Unstructured
+	fn         ConstraintFn
+}
+
+type ConstraintFn func(storage map[string]*unstructured.Unstructured, review *unstructured.Unstructured) *types.Result
 
 type ConstraintKey struct {
 	Kind string

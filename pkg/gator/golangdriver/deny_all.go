@@ -5,7 +5,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-func DenyAll(_ interface{}) Constraint {
+func DenyAll(_ interface{}) ConstraintFn {
 	return func(_ map[string]*unstructured.Unstructured, _ *unstructured.Unstructured) *types.Result {
 		return &types.Result{
 			Msg: "deny all",
