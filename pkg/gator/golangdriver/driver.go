@@ -22,6 +22,8 @@ type Driver struct {
 	storage map[string]*unstructured.Unstructured
 }
 
+var _ drivers.Driver = &Driver{}
+
 func NewDriver() *Driver {
 	return &Driver{
 		templates:   make(map[string]Template),
