@@ -77,10 +77,25 @@ func TestDriver_Query(t *testing.T) {
 			},
 			review: FakeIngress("foo-2", "foo").Object,
 			want: []*types.Result{{
-				Msg:               `ingress host conflicts with an existing ingress: "foo"`,
+				Msg:               `ingress host conflicts with an existing ingress (go): "foo"`,
 				Constraint:        FakeConstraint("bar", "bar-1"),
 				EnforcementAction: constraints.EnforcementActionDeny,
 			}},
+		},
+		{
+			name: "replace Template",
+			templates: []*templates.ConstraintTemplate{
+				FakeConstraintTemplate("bar", UniqueIngressHostKey),
+				FakeConstraintTemplate("bar", "x-"+UniqueIngressHostKey),
+			},
+			constraints: []*unstructured.Unstructured{
+				FakeConstraint("bar", "bar-1"),
+			},
+			storage: []*unstructured.Unstructured{
+				FakeIngress("foo-1", "foo"),
+			},
+			review: FakeIngress("foo-2", "foo"),
+			want:   nil,
 		},
 	}
 

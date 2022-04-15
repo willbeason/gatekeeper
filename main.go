@@ -267,13 +267,15 @@ func setupControllers(mgr ctrl.Manager, sw *watch.ControllerSwitch, tracker *rea
 		mutationOpts.ProviderCache = providerCache
 	}
 	// initialize OPA
-	driver := golangdriver.NewDriver()
-	//if err != nil {
-	//	setupLog.Error(err, "unable to set up Driver")
-	//	os.Exit(1)
-	//}
+	driver, err := local.New()
+	if err != nil {
+		setupLog.Error(err, "unable to set up Driver")
+		os.Exit(1)
+	}
 
-	client, err := constraintclient.NewClient(constraintclient.Targets(&target.K8sValidationTarget{}), constraintclient.Driver(driver))
+	drivers := constraintclient.Driver(golangdriver.NewDriver(), driver)
+
+	client, err := constraintclient.NewClient(constraintclient.Targets(&target.K8sValidationTarget{}), drivers)
 	if err != nil {
 		setupLog.Error(err, "unable to set up OPA client")
 		os.Exit(1)

@@ -16,6 +16,7 @@ import (
 	"github.com/open-policy-agent/frameworks/constraint/pkg/types"
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/utils/pointer"
 )
 
 const statusField = "status"
@@ -32,7 +33,7 @@ const statusField = "status"
 type Client struct {
 	// driver contains the Rego runtime environments to run queries against.
 	// Does not require mutex locking as Driver is threadsafe.
-	driver drivers.Driver
+	drivers []drivers.Driver
 	// targets are the targets supported by this Client.
 	// Assumed to be constant after initialization.
 	targets map[string]handler.TargetHandler
@@ -134,8 +135,10 @@ func (c *Client) AddTemplate(ctx context.Context, templ *templates.ConstraintTem
 		return resp, err
 	}
 
-	if err := c.driver.AddTemplate(ctx, templ); err != nil {
-		return resp, err
+	for _, driver := range c.drivers {
+		if err := driver.AddTemplate(ctx, templ); err != nil {
+			return resp, err
+		}
 	}
 
 	templateName := templ.GetName()
@@ -188,9 +191,11 @@ func (c *Client) RemoveTemplate(ctx context.Context, templ *templates.Constraint
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
-	err := c.driver.RemoveTemplate(ctx, templ)
-	if err != nil {
-		return resp, err
+	for _, driver := range c.drivers {
+		err := driver.RemoveTemplate(ctx, templ)
+		if err != nil {
+			return resp, err
+		}
 	}
 
 	name := templ.GetName()
@@ -264,9 +269,11 @@ func (c *Client) AddConstraint(ctx context.Context, constraint *unstructured.Uns
 	}
 
 	if changed {
-		err = c.driver.AddConstraint(ctx, constraint)
-		if err != nil {
-			return resp, err
+		for _, driver := range c.drivers {
+			err = driver.AddConstraint(ctx, constraint)
+			if err != nil {
+				return resp, err
+			}
 		}
 	}
 
@@ -290,9 +297,11 @@ func (c *Client) RemoveConstraint(ctx context.Context, constraint *unstructured.
 		return resp, err
 	}
 
-	err = c.driver.RemoveConstraint(ctx, constraint)
-	if err != nil {
-		return nil, err
+	for _, driver := range c.drivers {
+		err = driver.RemoveConstraint(ctx, constraint)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	kind := constraint.GetKind()
@@ -415,14 +424,16 @@ func (c *Client) AddData(ctx context.Context, data interface{}) (*types.Response
 			}
 		}
 
-		err = c.driver.AddData(ctx, name, key, processedData)
-		if err != nil {
-			errMap[name] = err
+		for _, driver := range c.drivers {
+			err = driver.AddData(ctx, name, key, processedData)
+			if err != nil {
+				errMap[name] = err
 
-			if cache != nil {
-				cache.Remove(key)
+				if cache != nil {
+					cache.Remove(key)
+				}
+				continue
 			}
-			continue
 		}
 
 		resp.Handled[name] = true
@@ -452,10 +463,12 @@ func (c *Client) RemoveData(ctx context.Context, data interface{}) (*types.Respo
 			continue
 		}
 
-		err = c.driver.RemoveData(ctx, target, relPath)
-		if err != nil {
-			errMap[target] = err
-			continue
+		for _, driver := range c.drivers {
+			err = driver.RemoveData(ctx, target, relPath)
+			if err != nil {
+				errMap[target] = err
+				continue
+			}
 		}
 
 		resp.Handled[target] = true
@@ -558,14 +571,23 @@ func (c *Client) review(ctx context.Context, target string, constraints []*unstr
 	var results []*types.Result
 	var tracesBuilder strings.Builder
 
-	results, trace, err := c.driver.Query(ctx, target, constraints, review, opts...)
-	if err != nil {
-		return nil, err
+	for _, driver := range c.drivers {
+		result, trace, err := driver.Query(ctx, target, constraints, review, opts...)
+		if err != nil {
+			return nil, err
+		}
+
+		results = append(results, result...)
+
+		if trace != nil {
+			tracesBuilder.WriteString(*trace)
+			tracesBuilder.WriteString("\n\n")
+		}
 	}
 
-	if trace != nil {
-		tracesBuilder.WriteString(*trace)
-		tracesBuilder.WriteString("\n\n")
+	var trace *string
+	if tracesBuilder.Len() != 0 {
+		trace = pointer.StringPtr(tracesBuilder.String())
 	}
 
 	return &types.Response{
@@ -577,7 +599,18 @@ func (c *Client) review(ctx context.Context, target string, constraints []*unstr
 
 // Dump dumps the state of OPA to aid in debugging.
 func (c *Client) Dump(ctx context.Context) (string, error) {
-	return c.driver.Dump(ctx)
+	dumps := strings.Builder{}
+
+	for _, driver := range c.drivers {
+		dump, err := driver.Dump(ctx)
+		if err != nil {
+			return "", err
+		}
+
+		dumps.WriteString(dump)
+	}
+
+	return dumps.String(), nil
 }
 
 // knownTargets returns a sorted list of known target names.

@@ -56,7 +56,7 @@ func TestUniqueIngressHost(t *testing.T) {
 			},
 			review: FakeIngress("foo-2", "foo"),
 			want: &types.Result{
-				Msg: `ingress host conflicts with an existing ingress: "foo"`,
+				Msg: `ingress host conflicts with an existing ingress (go): "foo"`,
 			},
 		},
 	}
