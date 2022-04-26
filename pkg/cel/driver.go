@@ -6,6 +6,7 @@ import (
 	"github.com/google/cel-policy-templates-go/policy"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/client/drivers"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/core/templates"
+	"github.com/open-policy-agent/frameworks/constraint/pkg/types"
 	"github.com/open-policy-agent/opa/storage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -17,7 +18,7 @@ type Driver struct {
 var _ drivers.Driver = &Driver{}
 
 func (d *Driver) AddTemplate(ctx context.Context, ct *templates.ConstraintTemplate) error {
-	engine, err := policy.NewEngine()
+	_, err := policy.NewEngine()
 	if err != nil {
 		return err
 	}
