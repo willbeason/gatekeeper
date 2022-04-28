@@ -410,6 +410,7 @@ func autoConvert_v1_Target_To_templates_Target(in *Target, out *templates.Target
 	out.Target = in.Target
 	out.Rego = in.Rego
 	out.Libs = *(*[]string)(unsafe.Pointer(&in.Libs))
+	out.CELX = in.CELX
 	return nil
 }
 
@@ -422,6 +423,7 @@ func autoConvert_templates_Target_To_v1_Target(in *templates.Target, out *Target
 	out.Target = in.Target
 	out.Rego = in.Rego
 	out.Libs = *(*[]string)(unsafe.Pointer(&in.Libs))
+	out.CELX = in.CELX
 	return nil
 }
 

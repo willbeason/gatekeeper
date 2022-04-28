@@ -17,7 +17,7 @@ Structural schemas have a variety of [requirements](https://kubernetes.io/docs/t
 For example, users of Gatekeeper may recognize the `k8srequiredlabels` ConstraintTemplate, defined here in version `v1beta1`:
 
 ```yaml
-apiVersion: templates.gatekeeper.sh/v1beta1
+apiVersion: templates.gatekeeper.sh/v1
 kind: ConstraintTemplate
 metadata:
   name: k8srequiredlabels

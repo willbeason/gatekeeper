@@ -13,6 +13,7 @@ import (
 	"github.com/open-policy-agent/frameworks/constraint/pkg/client/drivers"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/core/templates"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/types"
+	target2 "github.com/open-policy-agent/gatekeeper/pkg/target"
 	"github.com/open-policy-agent/opa/storage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -34,7 +35,11 @@ func (d *Driver) AddTemplate(ctx context.Context, ct *templates.ConstraintTempla
 		decls.NewVar("resource", decls.Any),
 	))
 
-	celCode := ct.Spec.Targets[0].CEL
+	if len(ct.Spec.Targets) == 0 {
+		return nil
+	}
+
+	celCode := ct.Spec.Targets[0].CELX
 	if celCode == "" {
 		return nil
 	}
@@ -110,13 +115,28 @@ func (d *Driver) Query(ctx context.Context, target string, constraints []*unstru
 		engines[strings.ToLower(constraint.GetKind())] = true
 	}
 
+	gkr := review.(*target2.GkReview)
+
+	obj := &unstructured.Unstructured{
+		Object: make(map[string]interface{}),
+	}
+
+	err := obj.UnmarshalJSON(gkr.Object.Raw)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	resource := map[string]interface{}{
-		"resource": review.(map[string]interface{}),
+		"resource": obj.Object,
 	}
 
 	var allDecisions []model.DecisionValue
 	for name := range engines {
-		decisions, err := d.engines[name].EvalAll(resource)
+		engine, found := d.engines[name]
+		if !found {
+			continue
+		}
+		decisions, err := engine.EvalAll(resource)
 		if err != nil {
 			return nil, nil, err
 		}

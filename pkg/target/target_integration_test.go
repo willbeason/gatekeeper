@@ -20,7 +20,7 @@ import (
 
 const (
 	testTemplate = `
-apiVersion: templates.gatekeeper.sh/v1beta1
+apiVersion: templates.gatekeeper.sh/v1
 kind: ConstraintTemplate
 metadata:
   name: denyall

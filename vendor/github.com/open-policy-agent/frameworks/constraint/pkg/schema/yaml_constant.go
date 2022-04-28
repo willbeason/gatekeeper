@@ -69,6 +69,8 @@ spec:
               targets:
                 items:
                   properties:
+                    celx:
+                      type: string
                     libs:
                       items:
                         type: string
@@ -172,6 +174,8 @@ spec:
               targets:
                 items:
                   properties:
+                    celx:
+                      type: string
                     libs:
                       items:
                         type: string
@@ -275,6 +279,8 @@ spec:
               targets:
                 items:
                   properties:
+                    celx:
+                      type: string
                     libs:
                       items:
                         type: string

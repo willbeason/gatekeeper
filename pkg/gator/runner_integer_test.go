@@ -8,7 +8,7 @@ import (
 )
 
 const templateV1Beta1Integer = `
-apiVersion: templates.gatekeeper.sh/v1beta1
+apiVersion: templates.gatekeeper.sh/v1
 kind: ConstraintTemplate
 metadata:
   name: k8sreplicalimits

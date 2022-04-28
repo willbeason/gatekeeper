@@ -3,7 +3,7 @@ package fixtures
 const (
 	TemplateAlwaysValidate = `
 kind: ConstraintTemplate
-apiVersion: templates.gatekeeper.sh/v1beta1
+apiVersion: templates.gatekeeper.sh/v1
 metadata:
   name: alwaysvalidate
 spec:
@@ -23,7 +23,7 @@ spec:
 
 	TemplateNeverValidate = `
 kind: ConstraintTemplate
-apiVersion: templates.gatekeeper.sh/v1beta1
+apiVersion: templates.gatekeeper.sh/v1
 metadata:
   name: nevervalidate
 spec:
@@ -43,7 +43,7 @@ spec:
 
 	TemplateNeverValidateTwice = `
 kind: ConstraintTemplate
-apiVersion: templates.gatekeeper.sh/v1beta1
+apiVersion: templates.gatekeeper.sh/v1
 metadata:
   name: nevervalidatetwice
 spec:
@@ -59,7 +59,7 @@ spec:
           true
           msg := "first message"
         }
-
+        
         violation[{"msg": msg}] {
           true
           msg := "second message"
@@ -88,7 +88,7 @@ spec:
 
 	TemplateInvalidYAML = `
 kind: ConstraintTemplate
-apiVersion: templates.gatekeeper.sh/v1beta1
+apiVersion: templates.gatekeeper.sh/v1
 metadata:
   name: alwaysvalidate
   {}: {}
@@ -109,7 +109,7 @@ spec:
 
 	TemplateMarshalError = `
 kind: ConstraintTemplate
-apiVersion: templates.gatekeeper.sh/v1beta1
+apiVersion: templates.gatekeeper.sh/v1
 metadata:
   name: alwaysvalidate
 spec: [a, b, c]
@@ -117,7 +117,7 @@ spec: [a, b, c]
 
 	TemplateCompileError = `
 kind: ConstraintTemplate
-apiVersion: templates.gatekeeper.sh/v1beta1
+apiVersion: templates.gatekeeper.sh/v1
 metadata:
   name: compileerror
 spec:
@@ -297,7 +297,7 @@ metadata:
 `
 
 	TemplateReferential = `
-apiVersion: templates.gatekeeper.sh/v1beta1
+apiVersion: templates.gatekeeper.sh/v1
 kind: ConstraintTemplate
 metadata:
   name: k8suniqueserviceselector

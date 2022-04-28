@@ -55,6 +55,7 @@ type Target struct {
 	Target string   `json:"target,omitempty"`
 	Rego   string   `json:"rego,omitempty"`
 	Libs   []string `json:"libs,omitempty"`
+	CELX   string   `json:"celx"`
 }
 
 // CreateCRDError represents a single error caught during parsing, compiling, etc.

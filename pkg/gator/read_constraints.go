@@ -119,11 +119,7 @@ func ToTemplate(scheme *runtime.Scheme, u *unstructured.Unstructured) (*template
 	// YAML parsing doesn't properly handle ObjectMeta, so we must
 	// marshal/unmashal through JSON.
 	jsonBytes, err := u.MarshalJSON()
-	if err != nil {
-		// Indicates a bug in unstructured.MarshalJSON(). Any Unstructured
-		// unmarshalled from YAML should be marshallable to JSON.
-		return nil, fmt.Errorf("calling unstructured.MarshalJSON(): %w", err)
-	}
+
 	err = json.Unmarshal(jsonBytes, t)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrAddingTemplate, err)

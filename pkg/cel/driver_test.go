@@ -13,7 +13,10 @@ import (
 	"github.com/open-policy-agent/frameworks/constraint/pkg/apis/constraints"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/core/templates"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/types"
+	"github.com/open-policy-agent/gatekeeper/pkg/target"
+	v1 "k8s.io/api/admission/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 const requireLabelsTemplate = `
@@ -70,7 +73,7 @@ func newTemplate(name string, cel string) *templates.ConstraintTemplate {
 	result.Name = name
 
 	result.Spec.Targets = []templates.Target{{
-		CEL: cel,
+		CELX: cel,
 	}}
 
 	return result
@@ -107,6 +110,7 @@ func TestDriver_Query(t *testing.T) {
 		ct:         newTemplate("requirelabels", requireLabelsTemplate),
 		constraint: newConstraint("RequireLabels", requireLabelsInstance),
 		obj: &unstructured.Unstructured{Object: map[string]interface{}{
+			"kind": "Foo",
 			"metadata": map[string]interface{}{
 				"labels": map[string]interface{}{
 					"env":      "prod",
@@ -121,6 +125,7 @@ func TestDriver_Query(t *testing.T) {
 		ct:         newTemplate("requirelabels", requireLabelsTemplate),
 		constraint: newConstraint("RequireLabels", requireLabelsInstance),
 		obj: &unstructured.Unstructured{Object: map[string]interface{}{
+			"kind": "Foo",
 			"metadata": map[string]interface{}{
 				"labels": map[string]interface{}{
 					"env":       "prod",
@@ -157,7 +162,7 @@ func TestDriver_Query(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			templ, iss := engine.CompileTemplate(model.StringSource(tt.ct.Spec.Targets[0].CEL, ""))
+			templ, iss := engine.CompileTemplate(model.StringSource(tt.ct.Spec.Targets[0].CELX, ""))
 			if iss.Err() != nil {
 				t.Fatal(iss.Err())
 			}
@@ -177,7 +182,12 @@ func TestDriver_Query(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			decisions, _, err := driver.Query(ctx, "", []*unstructured.Unstructured{tt.constraint}, tt.obj.Object)
+			raw, err := tt.obj.MarshalJSON()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			decisions, _, err := driver.Query(ctx, "", []*unstructured.Unstructured{tt.constraint}, &target.GkReview{AdmissionRequest: v1.AdmissionRequest{Object: runtime.RawExtension{Raw: raw}}})
 			if err != nil {
 				t.Fatal(err)
 			}
