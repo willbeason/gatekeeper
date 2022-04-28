@@ -70,7 +70,7 @@ func gkReviewToObject(req *GkReview) (*unstructured.Unstructured, *unstructured.
 		obj = &unstructured.Unstructured{}
 		err := obj.UnmarshalJSON(req.Object.Raw)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("%w: failed to unmarshal GkReview object %s", ErrRequestObject, string(req.Object.Raw))
+			return nil, nil, nil, fmt.Errorf("%w: failed to unmarshal gkReview object %s", ErrRequestObject, string(req.Object.Raw))
 		}
 	}
 
@@ -79,7 +79,7 @@ func gkReviewToObject(req *GkReview) (*unstructured.Unstructured, *unstructured.
 		oldObj = &unstructured.Unstructured{}
 		err := oldObj.UnmarshalJSON(req.OldObject.Raw)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("%w: failed to unmarshal GkReview oldObject %s", ErrRequestObject, string(req.OldObject.Raw))
+			return nil, nil, nil, fmt.Errorf("%w: failed to unmarshal gkReview oldObject %s", ErrRequestObject, string(req.OldObject.Raw))
 		}
 	}
 

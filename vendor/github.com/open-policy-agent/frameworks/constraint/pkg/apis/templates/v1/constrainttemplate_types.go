@@ -16,7 +16,6 @@ limitations under the License.
 package v1
 
 import (
-	"github.com/google/cel-policy-templates-go/policy/model"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -55,10 +54,9 @@ type Validation struct {
 }
 
 type Target struct {
-	Target string         `json:"target,omitempty"`
-	Rego   string         `json:"rego,omitempty"`
-	Libs   []string       `json:"libs,omitempty"`
-	CEL    model.Template `json:"cel,omitempty"`
+	Target string   `json:"target,omitempty"`
+	Rego   string   `json:"rego,omitempty"`
+	Libs   []string `json:"libs,omitempty"`
 }
 
 // CreateCRDError represents a single error caught during parsing, compiling, etc.
