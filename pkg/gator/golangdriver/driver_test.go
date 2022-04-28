@@ -9,8 +9,10 @@ import (
 	"github.com/open-policy-agent/frameworks/constraint/pkg/core/templates"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/types"
 	target2 "github.com/open-policy-agent/gatekeeper/pkg/target"
+	v1 "k8s.io/api/admission/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 func FakeConstraintTemplate(kind, entry string) *templates.ConstraintTemplate {
@@ -94,7 +96,7 @@ func TestDriver_Query(t *testing.T) {
 			storage: []*unstructured.Unstructured{
 				FakeIngress("foo-1", "foo"),
 			},
-			review: FakeIngress("foo-2", "foo"),
+			review: FakeIngress("foo-2", "foo").Object,
 			want:   nil,
 		},
 	}
@@ -128,7 +130,15 @@ func TestDriver_Query(t *testing.T) {
 				}
 			}
 
-			got, _, err := driver.Query(ctx, "", tt.constraints, tt.review)
+			u := &unstructured.Unstructured{Object: tt.review}
+			jsn, err := u.MarshalJSON()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			obj := &target2.GkReview{AdmissionRequest: v1.AdmissionRequest{Object: runtime.RawExtension{Raw: jsn}}}
+
+			got, _, err := driver.Query(ctx, "", tt.constraints, obj)
 			if err != nil {
 				t.Fatal(err)
 			}
