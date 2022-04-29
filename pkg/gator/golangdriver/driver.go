@@ -2,6 +2,7 @@ package golangdriver
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	constraints2 "github.com/open-policy-agent/frameworks/constraint/pkg/apis/constraints"
@@ -32,7 +33,12 @@ func NewDriver() *Driver {
 
 func (d *Driver) AddTemplate(ctx context.Context, ct *templates.ConstraintTemplate) error {
 	kind := ct.Spec.CRD.Spec.Names.Kind
-	entry := ct.Annotations[Annotation]
+	entry, exists := ct.Annotations[Annotation]
+	if !exists {
+		return nil
+	}
+
+	fmt.Println("Adding Golang Template", entry)
 
 	templateFn, found := library[entry]
 	if !found {
@@ -86,6 +92,8 @@ func (d *Driver) AddConstraint(ctx context.Context, constraint *unstructured.Uns
 		fn:         c,
 	}
 
+	fmt.Println("Added Golang Constraint", kind, constraint.GetName())
+
 	return nil
 }
 
@@ -101,6 +109,14 @@ func (d *Driver) RemoveConstraint(ctx context.Context, constraint *unstructured.
 func (d *Driver) AddData(ctx context.Context, target string, path storage.Path, data interface{}) error {
 	obj := &unstructured.Unstructured{Object: data.(map[string]interface{})}
 	key := ToKey(path)
+
+	gvk := obj.GroupVersionKind()
+	fmt.Println("Adding Data", gvk)
+	if gvk.Kind == "Ingress" {
+		if gvk.Group == "extensions" || gvk.Group == "networking.k8s.io" {
+			fmt.Println("Adding Ingress", obj.GetNamespace(), obj.GetName())
+		}
+	}
 
 	d.storage[key] = obj
 
@@ -132,14 +148,17 @@ func (d *Driver) Query(ctx context.Context, target string, constraints []*unstru
 		kind := constraint.GetKind()
 		kindConstraints, found := d.constraints[kind]
 		if !found {
+			fmt.Println("No Template for", kind, "found")
 			continue
 		}
 
 		name := constraint.GetName()
 		toRun, found := kindConstraints[name]
 		if !found {
+			fmt.Println("No Constraint", kind, "named", name, "found")
 			continue
 		}
+		fmt.Println("Running Golang Constraint", constraint.GetKind(), constraint.GetName())
 
 		result := toRun.fn(d.storage, obj)
 		if result != nil {

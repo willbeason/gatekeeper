@@ -14,6 +14,7 @@ import (
 	"github.com/open-policy-agent/frameworks/constraint/pkg/core/templates"
 	"github.com/open-policy-agent/frameworks/constraint/pkg/types"
 	"github.com/open-policy-agent/gatekeeper/pkg/target"
+	yaml2 "gopkg.in/yaml.v2"
 	v1 "k8s.io/api/admission/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -171,6 +172,9 @@ func TestDriver_Query(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+
+			yaml, _ := yaml2.Marshal(tt.constraint)
+			t.Fatal(string(yaml))
 
 			inst, iss := engine.CompileInstance(model.StringSource(tt.constraint.Object["spec"].(map[string]interface{})["cel"].(string), ""))
 			if iss.Err() != nil {

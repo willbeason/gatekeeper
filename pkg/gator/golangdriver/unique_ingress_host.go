@@ -12,6 +12,9 @@ const UniqueIngressHostKey = "unique-ingress-host"
 func UniqueIngressHost(_ interface{}) ConstraintFn {
 	return func(storage map[string]*unstructured.Unstructured, review *unstructured.Unstructured) *types.Result {
 		hosts := getHosts(review.Object)
+		for host := range hosts {
+			fmt.Println("New host", host)
+		}
 
 		for _, stored := range storage {
 			gvk := stored.GroupVersionKind()
@@ -22,11 +25,17 @@ func UniqueIngressHost(_ interface{}) ConstraintFn {
 				continue
 			}
 			if review.GetName() == stored.GetName() && review.GetNamespace() == stored.GetNamespace() {
+				fmt.Println("Identical ingress")
 				continue
 			}
 
+			fmt.Println("Existing ingress", stored.GetNamespace(), stored.GetName())
+
 			storedHosts := getHosts(stored.Object)
+
 			for h := range storedHosts {
+				fmt.Println("Existing host", h)
+
 				if hosts[h] {
 					conflict := h
 					return &types.Result{

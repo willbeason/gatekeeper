@@ -35,6 +35,7 @@ import (
 	mutationsv1beta1 "github.com/open-policy-agent/gatekeeper/apis/mutations/v1beta1"
 	statusv1beta1 "github.com/open-policy-agent/gatekeeper/apis/status/v1beta1"
 	"github.com/open-policy-agent/gatekeeper/pkg/audit"
+	"github.com/open-policy-agent/gatekeeper/pkg/cel"
 	"github.com/open-policy-agent/gatekeeper/pkg/controller"
 	"github.com/open-policy-agent/gatekeeper/pkg/controller/config/process"
 	"github.com/open-policy-agent/gatekeeper/pkg/externaldata"
@@ -273,7 +274,7 @@ func setupControllers(mgr ctrl.Manager, sw *watch.ControllerSwitch, tracker *rea
 		os.Exit(1)
 	}
 
-	drivers := constraintclient.Driver(golangdriver.NewDriver(), driver)
+	drivers := constraintclient.Driver(golangdriver.NewDriver(), driver, cel.NewDriver())
 
 	client, err := constraintclient.NewClient(constraintclient.Targets(&target.K8sValidationTarget{}), drivers)
 	if err != nil {

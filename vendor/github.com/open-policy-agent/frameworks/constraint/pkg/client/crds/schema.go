@@ -12,6 +12,7 @@ func CreateSchema(templ *templates.ConstraintTemplate, target MatchSchemaProvide
 	props := map[string]apiextensions.JSONSchemaProps{
 		"match":             target.MatchSchema(),
 		"enforcementAction": {Type: "string"},
+		"cel":               {Type: "string"},
 	}
 
 	if templ.Spec.CRD.Spec.Validation != nil && templ.Spec.CRD.Spec.Validation.OpenAPIV3Schema != nil {
