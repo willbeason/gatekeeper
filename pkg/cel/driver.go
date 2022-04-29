@@ -136,9 +136,12 @@ func (d *Driver) Query(ctx context.Context, target string, constraints []*unstru
 		if !found {
 			continue
 		}
+
+		fmt.Println("Running CEL Engine", name)
+
 		decisions, err := engine.EvalAll(resource)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("error running CEL eval: %v", err)
 		}
 		allDecisions = append(allDecisions, decisions...)
 	}
@@ -152,6 +155,7 @@ func (d *Driver) Query(ctx context.Context, target string, constraints []*unstru
 			Metadata: map[string]interface{}{
 				"name": decision.Name(),
 			},
+			Constraint:        constraints[0],
 			Msg:               decision.String(),
 			EnforcementAction: constraints2.EnforcementActionDeny,
 		}
